@@ -195,6 +195,7 @@ async def cmd_help(message: Message, config: Config) -> None:
             cooldown=config.cooldown_seconds,
             contact=config.admin_contact,
             hours_line=hours_line,
+            dedupe=config.dedupe_repeats,
         )
     )
 

@@ -61,6 +61,7 @@ async def on_group_text(message: Message, db: Database, config: Config) -> None:
         cooldown=config.cooldown_seconds,
         per_iriska=config.messages_per_iriska,
         weight=weight,
+        dedupe=config.dedupe_repeats,
     )
     if accrued:
         logger.info(

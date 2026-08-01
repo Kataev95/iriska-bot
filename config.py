@@ -77,6 +77,7 @@ class Config:
     db_path: str
     min_msg_len: int
     cooldown_seconds: float
+    dedupe_repeats: bool
     messages_per_iriska: int
     withdraw_threshold: int
     bonus_enabled: bool
@@ -108,8 +109,9 @@ def load_config() -> Config:
         admin_usernames=_names_env("ADMIN_USERNAMES", "PabloSvytoy"),
         admin_contact=(os.getenv("ADMIN_CONTACT") or "@PabloSvytoy").strip(),
         db_path=(os.getenv("DB_PATH") or "data/iriski.db").strip(),
-        min_msg_len=_int_env("MIN_MSG_LEN", 3),
-        cooldown_seconds=_float_env("COOLDOWN_SECONDS", 5.0),
+        min_msg_len=_int_env("MIN_MSG_LEN", 1),
+        cooldown_seconds=_float_env("COOLDOWN_SECONDS", 0.0),
+        dedupe_repeats=_bool_env("DEDUPE_REPEATS", False),
         messages_per_iriska=_int_env("MESSAGES_PER_IRISKA", 100),
         withdraw_threshold=_int_env("WITHDRAW_THRESHOLD", 300),
         bonus_enabled=_bool_env("BONUS_ENABLED", True),

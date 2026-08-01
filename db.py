@@ -112,12 +112,13 @@ class Database:
         cooldown: float,
         per_iriska: int,
         weight: int = 1,
+        dedupe: bool = True,
     ) -> tuple[bool, int]:
         """Пробует засчитать сообщение.
 
         Возвращает (засчитано ли, сколько ирисок начислено этим сообщением).
-        Не засчитывает, если не прошёл кулдаун или сообщение — точный повтор
-        предыдущего засчитанного (защита от копипаст-накрутки).
+        Антинакрутка опциональна: cooldown <= 0 отключает паузу между
+        зачётами, dedupe=False разрешает повторы одного сообщения подряд.
 
         weight — вклад сообщения в прогресс к ириске (бонусные часы: 2).
         Счётчики сообщений (total_counted, daily_stats) всегда растут на 1.
@@ -131,9 +132,9 @@ class Database:
             )
             row = await cur.fetchone()
             if row is not None:
-                if now_ts - row["last_counted_ts"] < cooldown:
+                if cooldown > 0 and now_ts - row["last_counted_ts"] < cooldown:
                     return False, 0
-                if row["last_msg_hash"] == msg_hash:
+                if dedupe and row["last_msg_hash"] == msg_hash:
                     return False, 0
                 progress = row["progress"] + max(weight, 1)
             else:

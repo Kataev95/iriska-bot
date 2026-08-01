@@ -168,6 +168,18 @@ async def run() -> None:
     total_ev = sum(slot_multiplier(v)[0] for v in range(1, 65))
     assert total_ev == 10 + 5 * 3 + 1 * 9, total_ev  # дом в плюсе: 34/64
 
+    # --- Антиспам выключен: короткие, подряд и с повторами — считаются ---
+    USER4 = 444
+    for i in range(3):
+        counted, _ = await db.try_count_message(
+            chat_id=CHAT, user_id=USER4, username="fast", first_name="Быстрый",
+            day="2026-08-01", msg_hash="same-hash",  # один хеш, одно время
+            now_ts=5_000_000.0, cooldown=0, per_iriska=100, dedupe=False,
+        )
+        assert counted, "без антиспама сообщение обязано засчитаться"
+    r4 = await db.get_user(CHAT, USER4)
+    assert r4["total_counted"] == 3, "повторы подряд должны считаться при dedupe=False"
+
     # --- Бонусные часы ---
     from config import _parse_windows
     from handlers.common import is_bonus_hour
