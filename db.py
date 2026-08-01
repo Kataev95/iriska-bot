@@ -267,6 +267,13 @@ class Database:
         row = await cur.fetchone()
         return int(row["c"])
 
+    async def known_chats(self) -> list[int]:
+        """Чаты, где бот уже вёл статистику (для анонсов)."""
+        cur = await self._require().execute(
+            "SELECT DISTINCT chat_id FROM users"
+        )
+        return [int(r["chat_id"]) for r in await cur.fetchall()]
+
     async def chat_totals(self, chat_id: int) -> aiosqlite.Row:
         cur = await self._require().execute(
             "SELECT COUNT(*) AS users, "

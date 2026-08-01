@@ -91,6 +91,7 @@ class Config:
     duel_ttl: float
     bonus_hours: tuple[tuple[int, int], ...]
     bonus_hours_mult: int
+    announce_bonus_hours: bool
     tz: ZoneInfo
 
 
@@ -127,5 +128,6 @@ def load_config() -> Config:
             else "7-9,13-15,20-21"
         ),
         bonus_hours_mult=_int_env("BONUS_HOURS_MULT", 2),
+        announce_bonus_hours=_bool_env("ANNOUNCE_BONUS_HOURS", True),
         tz=ZoneInfo((os.getenv("BOT_TZ") or "Europe/Moscow").strip()),
     )

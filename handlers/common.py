@@ -30,6 +30,25 @@ def is_bonus_hour(hour: int, windows: tuple[tuple[int, int], ...]) -> bool:
     return any(start <= hour < end for start, end in windows)
 
 
+def current_window(hour: int, windows: tuple[tuple[int, int], ...]) -> tuple[int, int] | None:
+    """Окно, в которое попадает час, или None."""
+    for start, end in windows:
+        if start <= hour < end:
+            return (start, end)
+    return None
+
+
+def next_window_start(hour: int, windows: tuple[tuple[int, int], ...]) -> int | None:
+    """Час старта ближайшего окна после текущего часа (с переходом на завтра)."""
+    starts = sorted(start for start, _ in windows)
+    if not starts:
+        return None
+    for start in starts:
+        if start > hour:
+            return start
+    return starts[0]
+
+
 def windows_text(windows: tuple[tuple[int, int], ...]) -> str:
     return ", ".join(f"{start:02d}:00–{end:02d}:00" for start, end in windows)
 

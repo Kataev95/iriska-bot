@@ -182,6 +182,21 @@ async def run() -> None:
     assert is_bonus_hour(13, ws) and is_bonus_hour(14, ws) and not is_bonus_hour(15, ws)
     assert is_bonus_hour(20, ws) and not is_bonus_hour(21, ws) and not is_bonus_hour(12, ws)
 
+    from handlers.common import current_window, next_window_start
+
+    assert current_window(8, ws) == (7, 9)
+    assert current_window(14, ws) == (13, 15)
+    assert current_window(12, ws) is None
+    assert next_window_start(9, ws) == 13
+    assert next_window_start(16, ws) == 20
+    assert next_window_start(22, ws) == 7   # переход на завтра
+    assert next_window_start(3, ws) == 7
+    assert next_window_start(10, ()) is None
+
+    # Список чатов для анонсов
+    chats = await db.known_chats()
+    assert CHAT in chats
+
     # Вес х2: 50 сообщений с weight=2 => 1 ириска, счётчик сообщений честный (50)
     USER3 = 333
     ts3 = 4_000_000.0

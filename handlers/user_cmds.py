@@ -15,6 +15,7 @@ from handlers.common import (
     GroupF,
     build_profile,
     is_bonus_hour,
+    next_window_start,
     today_day,
     trig,
     week_ago_day,
@@ -164,10 +165,16 @@ async def cmd_hours(message: Message, config: Config) -> None:
     if is_bonus_hour(now.hour, config.bonus_hours):
         status = f"🔥 <b>Сейчас бонусный час</b> — каждое сообщение идёт х{mult}!"
     else:
-        status = "Сейчас обычное время — заглядывай в бонусные окна 😉"
+        nxt = next_window_start(now.hour, config.bonus_hours)
+        nxt_text = f" Следующее окно — в {nxt:02d}:00." if nxt is not None else ""
+        status = f"Сейчас обычное время.{nxt_text}"
+    announce_note = (
+        "\nО старте бонусного часа бот объявляет в чате."
+        if config.announce_bonus_hours else ""
+    )
     await message.reply(
         f"⏰ <b>Бонусные часы</b> — прогресс к ирискам х{mult}:\n"
-        f"{windows_text(config.bonus_hours)} ({tz_label})\n\n{status}"
+        f"{windows_text(config.bonus_hours)} ({tz_label})\n\n{status}{announce_note}"
     )
 
 
