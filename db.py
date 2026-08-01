@@ -41,9 +41,22 @@ CREATE TABLE IF NOT EXISTS ledger (
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS duels (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id       INTEGER NOT NULL,
+    challenger_id INTEGER NOT NULL,
+    target_id     INTEGER NOT NULL,
+    amount        INTEGER NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'pending',
+    winner_id     INTEGER,
+    created_ts    REAL    NOT NULL,
+    resolved_ts   REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_daily_chat_day ON daily_stats (chat_id, day);
 CREATE INDEX IF NOT EXISTS idx_users_top ON users (chat_id, total_counted DESC);
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (chat_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_duels_pending ON duels (chat_id, status);
 """
 
 
@@ -63,7 +76,16 @@ class Database:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(SCHEMA)
+        await self._migrate()
         await self._db.commit()
+
+    async def _migrate(self) -> None:
+        """Догоняющие миграции для баз, созданных старыми версиями бота."""
+        db = self._require()
+        cur = await db.execute("PRAGMA table_info(users)")
+        cols = {row["name"] for row in await cur.fetchall()}
+        if "last_bonus_day" not in cols:
+            await db.execute("ALTER TABLE users ADD COLUMN last_bonus_day TEXT")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -289,3 +311,161 @@ class Database:
             )
             await db.commit()
             return "ok", new_balance
+
+    # ---------- ежедневный бонус ----------
+
+    async def claim_bonus(
+        self, chat_id: int, user_id: int,
+        username: str | None, first_name: str | None,
+        day: str, amount: int,
+    ) -> tuple[str, int]:
+        """Выдаёт бонус раз в день. Возвращает ("ok" | "already", баланс)."""
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                """
+                INSERT INTO users (chat_id, user_id, username, first_name)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (chat_id, user_id) DO UPDATE SET
+                    username = excluded.username,
+                    first_name = excluded.first_name
+                """,
+                (chat_id, user_id, username, first_name),
+            )
+            cur = await db.execute(
+                "SELECT balance, last_bonus_day FROM users "
+                "WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = await cur.fetchone()
+            if row["last_bonus_day"] == day:
+                await db.commit()
+                return "already", int(row["balance"])
+            new_balance = row["balance"] + amount
+            await db.execute(
+                "UPDATE users SET balance = ?, earned_total = earned_total + ?, "
+                "last_bonus_day = ? WHERE chat_id = ? AND user_id = ?",
+                (new_balance, amount, day, chat_id, user_id),
+            )
+            await db.execute(
+                "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                "VALUES (?, ?, ?, 'ежедневный бонус')",
+                (chat_id, user_id, amount),
+            )
+            await db.commit()
+            return "ok", new_balance
+
+    # ---------- дуэли ----------
+
+    async def expire_old_duels(self, chat_id: int, now_ts: float, ttl: float) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "UPDATE duels SET status = 'expired', resolved_ts = ? "
+                "WHERE chat_id = ? AND status = 'pending' AND created_ts < ?",
+                (now_ts, chat_id, now_ts - ttl),
+            )
+            await db.commit()
+
+    async def has_pending_duel(self, chat_id: int, user_id: int) -> bool:
+        cur = await self._require().execute(
+            "SELECT 1 FROM duels WHERE chat_id = ? AND status = 'pending' "
+            "AND (challenger_id = ? OR target_id = ?) LIMIT 1",
+            (chat_id, user_id, user_id),
+        )
+        return await cur.fetchone() is not None
+
+    async def create_duel(
+        self, chat_id: int, challenger_id: int, target_id: int,
+        amount: int, now_ts: float,
+    ) -> int:
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "INSERT INTO duels (chat_id, challenger_id, target_id, amount, created_ts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (chat_id, challenger_id, target_id, amount, now_ts),
+            )
+            await db.commit()
+            return int(cur.lastrowid)
+
+    async def pending_duel_for_target(self, chat_id: int, target_id: int) -> aiosqlite.Row | None:
+        cur = await self._require().execute(
+            "SELECT * FROM duels WHERE chat_id = ? AND target_id = ? "
+            "AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (chat_id, target_id),
+        )
+        return await cur.fetchone()
+
+    async def pending_duel_by_challenger(self, chat_id: int, challenger_id: int) -> aiosqlite.Row | None:
+        cur = await self._require().execute(
+            "SELECT * FROM duels WHERE chat_id = ? AND challenger_id = ? "
+            "AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (chat_id, challenger_id),
+        )
+        return await cur.fetchone()
+
+    async def set_duel_status(self, duel_id: int, status: str, resolved_ts: float) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "UPDATE duels SET status = ?, resolved_ts = ? WHERE id = ?",
+                (status, resolved_ts, duel_id),
+            )
+            await db.commit()
+
+    async def settle_duel(
+        self, duel_id: int, chat_id: int, winner_id: int, loser_id: int,
+        amount: int, now_ts: float,
+    ) -> tuple[str, int, int]:
+        """Перевод ставки проигравшего победителю.
+
+        Возвращает (статус, баланс победителя, баланс проигравшего):
+        - ("ok", ...) — дуэль рассчитана
+        - ("loser_broke", 0, баланс) — у проигравшего уже нет ставки, дуэль отменена
+        - ("missing", 0, 0) — участник пропал из базы, дуэль отменена
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT user_id, balance FROM users "
+                "WHERE chat_id = ? AND user_id IN (?, ?)",
+                (chat_id, winner_id, loser_id),
+            )
+            balances = {r["user_id"]: r["balance"] for r in await cur.fetchall()}
+            if winner_id not in balances or loser_id not in balances:
+                await db.execute(
+                    "UPDATE duels SET status = 'cancelled', resolved_ts = ? WHERE id = ?",
+                    (now_ts, duel_id),
+                )
+                await db.commit()
+                return "missing", 0, 0
+            if balances[loser_id] < amount:
+                await db.execute(
+                    "UPDATE duels SET status = 'cancelled', resolved_ts = ? WHERE id = ?",
+                    (now_ts, duel_id),
+                )
+                await db.commit()
+                return "loser_broke", 0, int(balances[loser_id])
+            winner_balance = balances[winner_id] + amount
+            loser_balance = balances[loser_id] - amount
+            await db.execute(
+                "UPDATE users SET balance = ?, earned_total = earned_total + ? "
+                "WHERE chat_id = ? AND user_id = ?",
+                (winner_balance, amount, chat_id, winner_id),
+            )
+            await db.execute(
+                "UPDATE users SET balance = ? WHERE chat_id = ? AND user_id = ?",
+                (loser_balance, chat_id, loser_id),
+            )
+            await db.execute(
+                "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                "VALUES (?, ?, ?, 'дуэль: выигрыш'), (?, ?, ?, 'дуэль: проигрыш')",
+                (chat_id, winner_id, amount, chat_id, loser_id, -amount),
+            )
+            await db.execute(
+                "UPDATE duels SET status = 'done', winner_id = ?, resolved_ts = ? WHERE id = ?",
+                (winner_id, now_ts, duel_id),
+            )
+            await db.commit()
+            return "ok", winner_balance, loser_balance

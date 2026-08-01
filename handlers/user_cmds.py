@@ -9,12 +9,13 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GroupF, build_profile, trig, week_ago_day
+from handlers.common import GroupF, build_profile, today_day, trig, week_ago_day
 from texts import display_name, fmt, help_text, iriski, msgs, place
 
 router = Router(name="user")
 
 STATS_TRIGGERS = {"стата", "моя стата", "статистика", "профиль"}
+DAY_TRIGGERS = {"топ дня", "топ за сегодня", "дневной топ"}
 BALANCE_TRIGGERS = {"баланс", "мой баланс", "ириски", "мои ириски"}
 TOP_TRIGGERS = {"топ", "топ чата", "общий топ"}
 WEEK_TRIGGERS = {"топ недели", "топ за неделю", "недельный топ"}
@@ -90,6 +91,22 @@ async def cmd_week(message: Message, db: Database, config: Config) -> None:
         await message.reply("За последние 7 дней тишина 😴")
         return
     lines = ["📅 <b>Топ за последние 7 дней</b>", ""]
+    for i, r in enumerate(rows, 1):
+        lines.append(
+            f"{place(i)} {display_name(r['first_name'], r['username'])} — "
+            f"<b>{fmt(r['cnt'])}</b> {msgs(r['cnt'])}"
+        )
+    await message.reply("\n".join(lines))
+
+
+@router.message(GroupF, Command("day", "today"))
+@router.message(GroupF, trig(DAY_TRIGGERS))
+async def cmd_day(message: Message, db: Database, config: Config) -> None:
+    rows = await db.top_since(message.chat.id, today_day(config), 10)
+    if not rows:
+        await message.reply("Сегодня пока тишина 😴 Самое время начать!")
+        return
+    lines = ["☀️ <b>Топ за сегодня</b>", ""]
     for i, r in enumerate(rows, 1):
         lines.append(
             f"{place(i)} {display_name(r['first_name'], r['username'])} — "

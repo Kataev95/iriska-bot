@@ -40,6 +40,13 @@ def _names_env(name: str, default: str) -> frozenset[str]:
     )
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw not in {"0", "false", "no", "off"}
+
+
 @dataclass(frozen=True)
 class Config:
     bot_token: str
@@ -51,6 +58,16 @@ class Config:
     cooldown_seconds: float
     messages_per_iriska: int
     withdraw_threshold: int
+    bonus_enabled: bool
+    bonus_min: int
+    bonus_max: int
+    games_enabled: bool
+    casino_min_bet: int
+    casino_max_bet: int
+    casino_cooldown: float
+    duel_min_bet: int
+    duel_max_bet: int
+    duel_ttl: float
     tz: ZoneInfo
 
 
@@ -71,5 +88,15 @@ def load_config() -> Config:
         cooldown_seconds=_float_env("COOLDOWN_SECONDS", 5.0),
         messages_per_iriska=_int_env("MESSAGES_PER_IRISKA", 100),
         withdraw_threshold=_int_env("WITHDRAW_THRESHOLD", 300),
+        bonus_enabled=_bool_env("BONUS_ENABLED", True),
+        bonus_min=_int_env("BONUS_MIN", 1),
+        bonus_max=_int_env("BONUS_MAX", 2),
+        games_enabled=_bool_env("GAMES_ENABLED", True),
+        casino_min_bet=_int_env("CASINO_MIN_BET", 1),
+        casino_max_bet=_int_env("CASINO_MAX_BET", 50),
+        casino_cooldown=_float_env("CASINO_COOLDOWN", 30.0),
+        duel_min_bet=_int_env("DUEL_MIN_BET", 1),
+        duel_max_bet=_int_env("DUEL_MAX_BET", 100),
+        duel_ttl=_float_env("DUEL_TTL", 300.0),
         tz=ZoneInfo((os.getenv("BOT_TZ") or "Europe/Moscow").strip()),
     )

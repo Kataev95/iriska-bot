@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 from config import load_config
 from db import Database
-from handlers import admin_router, counting_router, user_router
+from handlers import admin_router, counting_router, games_router, user_router
 
 logger = logging.getLogger("iriska-bot")
 
@@ -29,8 +29,12 @@ async def set_commands(bot: Bot) -> None:
     group_cmds = [
         BotCommand(command="me", description="Моя статистика и ириски"),
         BotCommand(command="balance", description="Баланс ирисок"),
+        BotCommand(command="bonus", description="Ежедневный бонус 🎁"),
         BotCommand(command="top", description="Топ чата за всё время"),
         BotCommand(command="week", description="Топ за 7 дней"),
+        BotCommand(command="day", description="Топ за сегодня"),
+        BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
+        BotCommand(command="games", description="Правила игр"),
         BotCommand(command="withdraw", description="Вывести ириски"),
         BotCommand(command="help", description="Как это работает"),
     ]
@@ -62,6 +66,7 @@ async def main() -> None:
     # чтобы команды и триггеры не попадали в статистику.
     dp.include_router(admin_router)
     dp.include_router(user_router)
+    dp.include_router(games_router)
     dp.include_router(counting_router)
 
     try:

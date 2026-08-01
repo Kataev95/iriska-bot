@@ -117,6 +117,85 @@ async def run() -> None:
     assert totals["msgs"] == 256
     assert totals["earned"] == 300  # 2 за активность + 298 бонусом
 
+    # --- Ежедневный бонус ---
+    status, bal = await db.claim_bonus(CHAT, USER1, "tester", "Тестер", "2026-08-01", 2)
+    assert status == "ok" and bal == 2  # баланс был 0 после вывода
+    status, bal2 = await db.claim_bonus(CHAT, USER1, "tester", "Тестер", "2026-08-01", 2)
+    assert status == "already" and bal2 == 2, "бонус выдался дважды за день"
+    status, bal3 = await db.claim_bonus(CHAT, USER1, "tester", "Тестер", "2026-08-02", 1)
+    assert status == "ok" and bal3 == 3, "бонус не выдался на следующий день"
+
+    # --- Дуэли ---
+    # USER1: 3, USER2: 0 -> выравниваем балансы
+    await db.adjust_balance(CHAT, USER1, 47, "тест", None)   # 50
+    await db.adjust_balance(CHAT, USER2, 50, "тест", None)   # 50
+
+    now = 3_000_000.0
+    duel_id = await db.create_duel(CHAT, USER1, USER2, 20, now)
+    assert await db.has_pending_duel(CHAT, USER1)
+    assert await db.has_pending_duel(CHAT, USER2)
+    duel = await db.pending_duel_for_target(CHAT, USER2)
+    assert duel is not None and duel["id"] == duel_id and duel["amount"] == 20
+
+    # Расчёт: USER2 проиграл — 20 переходят USER1
+    status, wb, lb = await db.settle_duel(duel_id, CHAT, USER1, USER2, 20, now + 10)
+    assert status == "ok" and wb == 70 and lb == 30
+    assert not await db.has_pending_duel(CHAT, USER1)
+
+    # Проигравший без денег: дуэль отменяется, балансы не трогаются
+    duel_id2 = await db.create_duel(CHAT, USER1, USER2, 20, now + 20)
+    await db.adjust_balance(CHAT, USER2, -25, "тест: обнуляем", None)  # у USER2 осталось 5
+    status, _, lb = await db.settle_duel(duel_id2, CHAT, USER1, USER2, 20, now + 30)
+    assert status == "loser_broke" and lb == 5
+    r1 = await db.get_user(CHAT, USER1)
+    assert r1["balance"] == 70, "баланс победителя изменился при отменённой дуэли"
+
+    # Протухание вызова
+    duel_id3 = await db.create_duel(CHAT, USER1, USER2, 5, now + 40)
+    await db.expire_old_duels(CHAT, now + 40 + 400, ttl=300)
+    assert not await db.has_pending_duel(CHAT, USER1), "дуэль не протухла"
+
+    # --- Слоты: раскладка выплат ---
+    from handlers.games import slot_multiplier, slot_reels
+
+    assert slot_reels(64) == (3, 3, 3)
+    assert slot_multiplier(64)[0] == 10          # джекпот 777
+    for v in (1, 22, 43):
+        assert slot_multiplier(v)[0] == 5, v     # три одинаковых
+    assert slot_multiplier(16)[0] == 1           # (3,3,0) — две семёрки
+    assert slot_multiplier(52)[0] == 1           # (3,0,3) — две семёрки
+    assert slot_multiplier(37)[0] == 0           # (0,1,2) — мимо
+    total_ev = sum(slot_multiplier(v)[0] for v in range(1, 65))
+    assert total_ev == 10 + 5 * 3 + 1 * 9, total_ev  # дом в плюсе: 34/64
+
+    # --- Миграция старой базы (без колонки last_bonus_day) ---
+    import sqlite3
+
+    old_path = os.path.join(tmp, "old.db")
+    conn = sqlite3.connect(old_path)
+    conn.execute(
+        "CREATE TABLE users (chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
+        "username TEXT, first_name TEXT, total_counted INTEGER NOT NULL DEFAULT 0, "
+        "balance INTEGER NOT NULL DEFAULT 0, earned_total INTEGER NOT NULL DEFAULT 0, "
+        "progress INTEGER NOT NULL DEFAULT 0, last_counted_ts REAL NOT NULL DEFAULT 0, "
+        "last_msg_hash TEXT, PRIMARY KEY (chat_id, user_id))"
+    )
+    conn.execute(
+        "INSERT INTO users (chat_id, user_id, username, first_name, balance) "
+        "VALUES (?, ?, 'old', 'Старый', 42)",
+        (CHAT, 777),
+    )
+    conn.commit()
+    conn.close()
+
+    old_db = Database(old_path)
+    await old_db.connect()  # должна пройти миграция
+    status, bal = await old_db.claim_bonus(CHAT, 777, "old", "Старый", "2026-08-01", 2)
+    assert status == "ok" and bal == 44, "миграция/бонус на старой базе не сработали"
+    row = await old_db.get_user(CHAT, 777)
+    assert row["balance"] == 44
+    await old_db.close()
+
     await db.close()
     print("✅ Все тесты пройдены")
 
