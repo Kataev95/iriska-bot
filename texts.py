@@ -47,7 +47,10 @@ def place(i: int) -> str:
     return _MEDALS.get(i, f"{i}.")
 
 
-def help_text(per: int, threshold: int, min_len: int, cooldown: float, contact: str) -> str:
+def help_text(
+    per: int, threshold: int, min_len: int, cooldown: float,
+    contact: str, hours_line: str = "",
+) -> str:
     return (
         "🍬 <b>Как заработать ириски</b>\n\n"
         "Ириски — валюта нашего чата. Начисляются за общение: "
@@ -58,7 +61,12 @@ def help_text(per: int, threshold: int, min_len: int, cooldown: float, contact: 
         f"• не чаще одного зачёта в {cooldown:g} сек\n"
         "• пересланные сообщения, стикеры, фото без текста и команды не считаются\n"
         "• повтор одного и того же сообщения подряд не считается\n\n"
-        f"<b>Вывод:</b> накопил <b>{fmt(threshold)}</b> {iriski(threshold)} — "
+        + (
+            f"⏰ <b>Бонусные часы</b> ({hours_line}) — прогресс к ирискам "
+            "идёт быстрее! Подробнее: /hours\n\n"
+            if hours_line else ""
+        )
+        + f"<b>Вывод:</b> накопил <b>{fmt(threshold)}</b> {iriski(threshold)} — "
         f"пиши {contact} и забирай.\n\n"
         "<b>Команды:</b>\n"
         "/me — моя статистика (или напиши «стата»)\n"
@@ -69,6 +77,7 @@ def help_text(per: int, threshold: int, min_len: int, cooldown: float, contact: 
         "/day — топ за сегодня («топ дня»)\n"
         "/casino 10 — слоты («казино 10»)\n"
         "/games — правила игр («игры»)\n"
+        "/hours — бонусные часы («бонусные часы»)\n"
         "/withdraw — вывод ирисок («вывод»)\n"
         "/help — эта справка\n\n"
         "🎮 Дуэль: ответь «дуэль 10» на сообщение соперника — монетка решит, "

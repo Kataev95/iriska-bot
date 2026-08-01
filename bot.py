@@ -35,6 +35,7 @@ async def set_commands(bot: Bot) -> None:
         BotCommand(command="day", description="Топ за сегодня"),
         BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
         BotCommand(command="games", description="Правила игр"),
+        BotCommand(command="hours", description="Бонусные часы ⏰"),
         BotCommand(command="withdraw", description="Вывести ириски"),
         BotCommand(command="help", description="Как это работает"),
     ]

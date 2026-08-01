@@ -168,6 +168,37 @@ async def run() -> None:
     total_ev = sum(slot_multiplier(v)[0] for v in range(1, 65))
     assert total_ev == 10 + 5 * 3 + 1 * 9, total_ev  # дом в плюсе: 34/64
 
+    # --- Бонусные часы ---
+    from config import _parse_windows
+    from handlers.common import is_bonus_hour
+
+    assert _parse_windows("7-9,13-15,20-21") == ((7, 9), (13, 15), (20, 21))
+    assert _parse_windows("") == ()
+    assert _parse_windows("25-30, 5-4, 8-10") == ((8, 10),)
+
+    ws = ((7, 9), (13, 15), (20, 21))
+    assert is_bonus_hour(7, ws) and is_bonus_hour(8, ws)
+    assert not is_bonus_hour(9, ws) and not is_bonus_hour(6, ws)
+    assert is_bonus_hour(13, ws) and is_bonus_hour(14, ws) and not is_bonus_hour(15, ws)
+    assert is_bonus_hour(20, ws) and not is_bonus_hour(21, ws) and not is_bonus_hour(12, ws)
+
+    # Вес х2: 50 сообщений с weight=2 => 1 ириска, счётчик сообщений честный (50)
+    USER3 = 333
+    ts3 = 4_000_000.0
+    for i in range(50):
+        counted, _ = await db.try_count_message(
+            chat_id=CHAT, user_id=USER3, username="w2", first_name="Двойной",
+            day="2026-08-01", msg_hash=f"w2-{i}", now_ts=ts3,
+            cooldown=5, per_iriska=100, weight=2,
+        )
+        assert counted
+        ts3 += 10
+    r3 = await db.get_user(CHAT, USER3)
+    assert r3["balance"] == 1, "50 сообщений х2 должны дать 1 ириску"
+    assert r3["progress"] == 0
+    assert r3["total_counted"] == 50, "счётчик сообщений должен остаться честным"
+    assert await db.user_count_on(CHAT, USER3, "2026-08-01") == 50
+
     # --- Миграция старой базы (без колонки last_bonus_day) ---
     import sqlite3
 

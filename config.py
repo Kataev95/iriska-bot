@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,26 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _parse_windows(raw: str) -> tuple[tuple[int, int], ...]:
+    """Разбор расписания вида "7-9,13-15,20-21" в окна часов.
+
+    Конец окна не включается: 7-9 означает с 07:00 до 08:59.
+    Некорректные куски молча пропускаются. Пустая строка — окон нет.
+    """
+    windows: list[tuple[int, int]] = []
+    for part in (raw or "").replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"^(\d{1,2})\s*[-–]\s*(\d{1,2})$", part)
+        if not m:
+            continue
+        start, end = int(m.group(1)), int(m.group(2))
+        if 0 <= start < end <= 24:
+            windows.append((start, end))
+    return tuple(windows)
+
+
 @dataclass(frozen=True)
 class Config:
     bot_token: str
@@ -68,6 +89,8 @@ class Config:
     duel_min_bet: int
     duel_max_bet: int
     duel_ttl: float
+    bonus_hours: tuple[tuple[int, int], ...]
+    bonus_hours_mult: int
     tz: ZoneInfo
 
 
@@ -98,5 +121,11 @@ def load_config() -> Config:
         duel_min_bet=_int_env("DUEL_MIN_BET", 1),
         duel_max_bet=_int_env("DUEL_MAX_BET", 100),
         duel_ttl=_float_env("DUEL_TTL", 300.0),
+        bonus_hours=_parse_windows(
+            os.getenv("BONUS_HOURS")
+            if os.getenv("BONUS_HOURS") is not None
+            else "7-9,13-15,20-21"
+        ),
+        bonus_hours_mult=_int_env("BONUS_HOURS_MULT", 2),
         tz=ZoneInfo((os.getenv("BOT_TZ") or "Europe/Moscow").strip()),
     )

@@ -25,6 +25,15 @@ def trig(words: set[str]):
     return F.text.func(lambda t: norm(t) in words)
 
 
+def is_bonus_hour(hour: int, windows: tuple[tuple[int, int], ...]) -> bool:
+    """Попадает ли час в одно из бонусных окон (конец окна не включается)."""
+    return any(start <= hour < end for start, end in windows)
+
+
+def windows_text(windows: tuple[tuple[int, int], ...]) -> str:
+    return ", ".join(f"{start:02d}:00–{end:02d}:00" for start, end in windows)
+
+
 def today_day(config: Config) -> str:
     return datetime.now(config.tz).strftime("%Y-%m-%d")
 

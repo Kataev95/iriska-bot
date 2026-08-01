@@ -111,12 +111,16 @@ class Database:
         now_ts: float,
         cooldown: float,
         per_iriska: int,
+        weight: int = 1,
     ) -> tuple[bool, int]:
         """Пробует засчитать сообщение.
 
         Возвращает (засчитано ли, сколько ирисок начислено этим сообщением).
         Не засчитывает, если не прошёл кулдаун или сообщение — точный повтор
         предыдущего засчитанного (защита от копипаст-накрутки).
+
+        weight — вклад сообщения в прогресс к ириске (бонусные часы: 2).
+        Счётчики сообщений (total_counted, daily_stats) всегда растут на 1.
         """
         db = self._require()
         async with self._lock:
@@ -131,9 +135,9 @@ class Database:
                     return False, 0
                 if row["last_msg_hash"] == msg_hash:
                     return False, 0
-                progress = row["progress"] + 1
+                progress = row["progress"] + max(weight, 1)
             else:
-                progress = 1
+                progress = max(weight, 1)
 
             accrued = 0
             if per_iriska > 0:

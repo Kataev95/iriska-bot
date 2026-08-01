@@ -17,7 +17,7 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GROUP_TYPES
+from handlers.common import GROUP_TYPES, is_bonus_hour
 
 logger = logging.getLogger(__name__)
 
@@ -46,17 +46,21 @@ async def on_group_text(message: Message, db: Database, config: Config) -> None:
     if len(text) < config.min_msg_len:
         return
 
-    day = datetime.now(config.tz).strftime("%Y-%m-%d")
+    now_local = datetime.now(config.tz)
+    weight = 1
+    if config.bonus_hours and is_bonus_hour(now_local.hour, config.bonus_hours):
+        weight = max(config.bonus_hours_mult, 1)
     counted, accrued = await db.try_count_message(
         chat_id=message.chat.id,
         user_id=user.id,
         username=user.username,
         first_name=user.first_name,
-        day=day,
+        day=now_local.strftime("%Y-%m-%d"),
         msg_hash=norm_hash(text),
         now_ts=time.time(),
         cooldown=config.cooldown_seconds,
         per_iriska=config.messages_per_iriska,
+        weight=weight,
     )
     if accrued:
         logger.info(

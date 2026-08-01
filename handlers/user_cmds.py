@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandStart
@@ -9,13 +11,22 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GroupF, build_profile, today_day, trig, week_ago_day
+from handlers.common import (
+    GroupF,
+    build_profile,
+    is_bonus_hour,
+    today_day,
+    trig,
+    week_ago_day,
+    windows_text,
+)
 from texts import display_name, fmt, help_text, iriski, msgs, place
 
 router = Router(name="user")
 
 STATS_TRIGGERS = {"стата", "моя стата", "статистика", "профиль"}
 DAY_TRIGGERS = {"топ дня", "топ за сегодня", "дневной топ"}
+HOURS_TRIGGERS = {"бонусные часы", "бонус часы", "часы бонуса"}
 BALANCE_TRIGGERS = {"баланс", "мой баланс", "ириски", "мои ириски"}
 TOP_TRIGGERS = {"топ", "топ чата", "общий топ"}
 WEEK_TRIGGERS = {"топ недели", "топ за неделю", "недельный топ"}
@@ -141,9 +152,34 @@ async def cmd_withdraw(message: Message, db: Database, config: Config) -> None:
         )
 
 
+@router.message(GroupF, Command("hours"))
+@router.message(GroupF, trig(HOURS_TRIGGERS))
+async def cmd_hours(message: Message, config: Config) -> None:
+    if not config.bonus_hours:
+        await message.reply("Бонусные часы сейчас не настроены.")
+        return
+    mult = max(config.bonus_hours_mult, 1)
+    now = datetime.now(config.tz)
+    tz_label = "МСК" if config.tz.key == "Europe/Moscow" else config.tz.key
+    if is_bonus_hour(now.hour, config.bonus_hours):
+        status = f"🔥 <b>Сейчас бонусный час</b> — каждое сообщение идёт х{mult}!"
+    else:
+        status = "Сейчас обычное время — заглядывай в бонусные окна 😉"
+    await message.reply(
+        f"⏰ <b>Бонусные часы</b> — прогресс к ирискам х{mult}:\n"
+        f"{windows_text(config.bonus_hours)} ({tz_label})\n\n{status}"
+    )
+
+
 @router.message(Command("help"))
 @router.message(GroupF, trig(HELP_TRIGGERS))
 async def cmd_help(message: Message, config: Config) -> None:
+    hours_line = ""
+    if config.bonus_hours:
+        hours_line = (
+            f"х{max(config.bonus_hours_mult, 1)} в "
+            f"{windows_text(config.bonus_hours)}"
+        )
     await message.reply(
         help_text(
             per=config.messages_per_iriska,
@@ -151,6 +187,7 @@ async def cmd_help(message: Message, config: Config) -> None:
             min_len=config.min_msg_len,
             cooldown=config.cooldown_seconds,
             contact=config.admin_contact,
+            hours_line=hours_line,
         )
     )
 
