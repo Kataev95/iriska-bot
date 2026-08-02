@@ -16,13 +16,21 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
 )
 from dotenv import load_dotenv
 
 from config import Config, load_config
 from db import Database
-from handlers import admin_router, counting_router, games_router, user_router
+from handlers import (
+    admin_router,
+    counting_router,
+    games_router,
+    quiz_router,
+    user_router,
+)
 from handlers.common import current_window, is_bonus_hour
+from handlers.quiz import load_active_chats
 
 logger = logging.getLogger("iriska-bot")
 
@@ -62,7 +70,7 @@ async def bonus_hours_announcer(bot: Bot, db: Database, config: Config) -> None:
             logger.exception("Ошибка анонсера бонусных часов")
 
 
-async def set_commands(bot: Bot) -> None:
+async def set_commands(bot: Bot, config: Config) -> None:
     group_cmds = [
         BotCommand(command="me", description="Моя статистика и ириски"),
         BotCommand(command="balance", description="Баланс ирисок"),
@@ -82,6 +90,19 @@ async def set_commands(bot: Bot) -> None:
     ]
     await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+
+    # Личное меню админов: команды викторины
+    admin_private = private_cmds + [
+        BotCommand(command="quiz", description="Викторина: /quiz Вопрос | ответ"),
+        BotCommand(command="quizstop", description="Остановить викторину"),
+    ]
+    for admin_id in config.admin_ids:
+        try:
+            await bot.set_my_commands(
+                admin_private, scope=BotCommandScopeChat(chat_id=admin_id)
+            )
+        except Exception as e:
+            logger.warning("Не смог задать меню для админа %s: %s", admin_id, e)
 
 
 async def main() -> None:
@@ -103,13 +124,16 @@ async def main() -> None:
     # Порядок важен: сначала команды, подсчёт — последним,
     # чтобы команды и триггеры не попадали в статистику.
     dp.include_router(admin_router)
+    dp.include_router(quiz_router)
     dp.include_router(user_router)
     dp.include_router(games_router)
     dp.include_router(counting_router)
 
+    await load_active_chats(db)  # викторины, пережившие рестарт
+
     announcer = asyncio.create_task(bonus_hours_announcer(bot, db, config))
     try:
-        await set_commands(bot)
+        await set_commands(bot, config)
         me = await bot.get_me()
         logger.info("Запущен как @%s", me.username)
         if not config.admin_ids:

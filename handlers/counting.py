@@ -18,6 +18,7 @@ from aiogram.types import Message
 from config import Config
 from db import Database
 from handlers.common import GROUP_TYPES, is_bonus_hour
+from handlers.quiz import handle_possible_answer
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +69,6 @@ async def on_group_text(message: Message, db: Database, config: Config) -> None:
             "+%d ириска(и): user=%s (%s) chat=%s",
             accrued, user.id, user.username or user.first_name, message.chat.id,
         )
+
+    # Ответ на активную викторину? Сообщение и посчитано, и может выиграть.
+    await handle_possible_answer(message, db)

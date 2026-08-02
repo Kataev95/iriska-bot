@@ -53,10 +53,25 @@ CREATE TABLE IF NOT EXISTS duels (
     resolved_ts   REAL
 );
 
+CREATE TABLE IF NOT EXISTS quizzes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id        INTEGER NOT NULL,
+    question       TEXT    NOT NULL,
+    answers        TEXT    NOT NULL,
+    display_answer TEXT    NOT NULL DEFAULT '',
+    prize          INTEGER NOT NULL DEFAULT 1,
+    status         TEXT    NOT NULL DEFAULT 'active',
+    created_by     INTEGER,
+    winner_id      INTEGER,
+    created_ts     REAL    NOT NULL,
+    resolved_ts    REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_daily_chat_day ON daily_stats (chat_id, day);
 CREATE INDEX IF NOT EXISTS idx_users_top ON users (chat_id, total_counted DESC);
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (chat_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_duels_pending ON duels (chat_id, status);
+CREATE INDEX IF NOT EXISTS idx_quizzes_active ON quizzes (chat_id, status);
 """
 
 
@@ -366,6 +381,115 @@ class Database:
             )
             await db.commit()
             return "ok", new_balance
+
+    # ---------- викторины ----------
+
+    async def create_quiz(
+        self, chat_id: int, question: str, answers: list[str],
+        display_answer: str, prize: int, created_by: int | None, now_ts: float,
+    ) -> int:
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "INSERT INTO quizzes (chat_id, question, answers, display_answer, "
+                "prize, created_by, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (chat_id, question, "\n".join(answers), display_answer,
+                 prize, created_by, now_ts),
+            )
+            await db.commit()
+            return int(cur.lastrowid)
+
+    async def active_quiz(self, chat_id: int) -> aiosqlite.Row | None:
+        cur = await self._require().execute(
+            "SELECT * FROM quizzes WHERE chat_id = ? AND status = 'active' "
+            "ORDER BY id DESC LIMIT 1",
+            (chat_id,),
+        )
+        return await cur.fetchone()
+
+    async def active_quiz_chat_ids(self) -> list[int]:
+        cur = await self._require().execute(
+            "SELECT DISTINCT chat_id FROM quizzes WHERE status = 'active'"
+        )
+        return [int(r["chat_id"]) for r in await cur.fetchall()]
+
+    async def try_win_quiz(
+        self, quiz_id: int, chat_id: int, user_id: int,
+        username: str | None, first_name: str | None, now_ts: float,
+    ) -> tuple[str, int, int]:
+        """Первый правильный ответ побеждает атомарно.
+
+        Возвращает ("ok", приз, новый баланс) или ("late", 0, 0),
+        если викторина уже закрыта (кто-то успел раньше).
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT prize FROM quizzes WHERE id = ? AND status = 'active'",
+                (quiz_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return "late", 0, 0
+            prize = int(row["prize"])
+            await db.execute(
+                "UPDATE quizzes SET status = 'won', winner_id = ?, resolved_ts = ? "
+                "WHERE id = ?",
+                (user_id, now_ts, quiz_id),
+            )
+            await db.execute(
+                """
+                INSERT INTO users (chat_id, user_id, username, first_name)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (chat_id, user_id) DO UPDATE SET
+                    username = excluded.username,
+                    first_name = excluded.first_name
+                """,
+                (chat_id, user_id, username, first_name),
+            )
+            cur = await db.execute(
+                "SELECT balance FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            balance = (await cur.fetchone())["balance"]
+            new_balance = balance + prize
+            await db.execute(
+                "UPDATE users SET balance = ?, earned_total = earned_total + ? "
+                "WHERE chat_id = ? AND user_id = ?",
+                (new_balance, prize, chat_id, user_id),
+            )
+            await db.execute(
+                "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                "VALUES (?, ?, ?, 'викторина: приз')",
+                (chat_id, user_id, prize),
+            )
+            await db.commit()
+            return "ok", prize, new_balance
+
+    async def cancel_quiz(self, quiz_id: int, now_ts: float) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "UPDATE quizzes SET status = 'cancelled', resolved_ts = ? "
+                "WHERE id = ? AND status = 'active'",
+                (now_ts, quiz_id),
+            )
+            await db.commit()
+
+    async def cancel_active_quizzes(self, now_ts: float) -> list[aiosqlite.Row]:
+        """Останавливает все активные викторины, возвращает их (для показа ответов)."""
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute("SELECT * FROM quizzes WHERE status = 'active'")
+            rows = list(await cur.fetchall())
+            if rows:
+                await db.execute(
+                    "UPDATE quizzes SET status = 'cancelled', resolved_ts = ? "
+                    "WHERE status = 'active'",
+                    (now_ts,),
+                )
+                await db.commit()
+            return rows
 
     # ---------- дуэли ----------
 

@@ -226,6 +226,36 @@ async def run() -> None:
     assert r3["total_counted"] == 50, "счётчик сообщений должен остаться честным"
     assert await db.user_count_on(CHAT, USER3, "2026-08-01") == 50
 
+    # --- Викторина ---
+    from handlers.quiz import parse_quiz_args
+
+    p = parse_quiz_args("Столица Франции? | Париж")
+    assert p == (1, "Столица Франции?", ["париж"], "Париж"), p
+    p = parse_quiz_args("5 | 2+2? | 4; четыре")
+    assert p == (5, "2+2?", ["4", "четыре"], "4"), p
+    p = parse_quiz_args("10 плюс 10? | 20")  # приз только в формате N | вопрос | ответ
+    assert p is not None and p[0] == 1 and p[1] == "10 плюс 10?"
+    assert parse_quiz_args("только вопрос без ответа") is None
+    assert parse_quiz_args("") is None
+
+    quiz_id = await db.create_quiz(CHAT, "Вопрос?", ["ответ"], "Ответ", 3, 999, 6_000_000.0)
+    q = await db.active_quiz(CHAT)
+    assert q is not None and q["id"] == quiz_id and q["prize"] == 3
+    assert CHAT in await db.active_quiz_chat_ids()
+
+    r2_before = (await db.get_user(CHAT, USER2))["balance"]
+    status, prize, bal = await db.try_win_quiz(quiz_id, CHAT, USER2, "second", "Второй", 6_000_100.0)
+    assert status == "ok" and prize == 3 and bal == r2_before + 3
+    status2, _, _ = await db.try_win_quiz(quiz_id, CHAT, USER1, "tester", "Тестер", 6_000_101.0)
+    assert status2 == "late", "второй ответивший не должен получить приз"
+    assert await db.active_quiz(CHAT) is None
+
+    quiz_id2 = await db.create_quiz(CHAT, "Ещё вопрос?", ["икс"], "икс", 1, 999, 6_000_200.0)
+    cancelled = await db.cancel_active_quizzes(6_000_300.0)
+    assert len(cancelled) == 1 and cancelled[0]["id"] == quiz_id2
+    assert await db.active_quiz(CHAT) is None
+    assert await db.active_quiz_chat_ids() == []
+
     # --- Миграция старой базы (без колонки last_bonus_day) ---
     import sqlite3
 
