@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS quizzes (
     answers        TEXT    NOT NULL,
     display_answer TEXT    NOT NULL DEFAULT '',
     prize          INTEGER NOT NULL DEFAULT 1,
+    seq            INTEGER NOT NULL DEFAULT 1,
+    total          INTEGER NOT NULL DEFAULT 1,
     status         TEXT    NOT NULL DEFAULT 'active',
     created_by     INTEGER,
     winner_id      INTEGER,
@@ -101,6 +103,16 @@ class Database:
         cols = {row["name"] for row in await cur.fetchall()}
         if "last_bonus_day" not in cols:
             await db.execute("ALTER TABLE users ADD COLUMN last_bonus_day TEXT")
+        cur = await db.execute("PRAGMA table_info(quizzes)")
+        qcols = {row["name"] for row in await cur.fetchall()}
+        if qcols and "seq" not in qcols:
+            await db.execute(
+                "ALTER TABLE quizzes ADD COLUMN seq INTEGER NOT NULL DEFAULT 1"
+            )
+        if qcols and "total" not in qcols:
+            await db.execute(
+                "ALTER TABLE quizzes ADD COLUMN total INTEGER NOT NULL DEFAULT 1"
+            )
 
     async def close(self) -> None:
         if self._db is not None:
@@ -471,25 +483,89 @@ class Database:
         async with self._lock:
             await db.execute(
                 "UPDATE quizzes SET status = 'cancelled', resolved_ts = ? "
-                "WHERE id = ? AND status = 'active'",
+                "WHERE id = ? AND status IN ('active', 'queued')",
                 (now_ts, quiz_id),
             )
             await db.commit()
 
-    async def cancel_active_quizzes(self, now_ts: float) -> list[aiosqlite.Row]:
-        """Останавливает все активные викторины, возвращает их (для показа ответов)."""
+    async def cancel_active_quizzes(self, now_ts: float) -> tuple[list[aiosqlite.Row], int]:
+        """Останавливает все викторины: активные и очередь.
+
+        Возвращает (активные строки для показа ответов, сколько удалено из очереди).
+        """
         db = self._require()
         async with self._lock:
             cur = await db.execute("SELECT * FROM quizzes WHERE status = 'active'")
-            rows = list(await cur.fetchall())
-            if rows:
+            active_rows = list(await cur.fetchall())
+            cur = await db.execute(
+                "SELECT COUNT(*) AS c FROM quizzes WHERE status = 'queued'"
+            )
+            queued = int((await cur.fetchone())["c"])
+            if active_rows or queued:
                 await db.execute(
                     "UPDATE quizzes SET status = 'cancelled', resolved_ts = ? "
-                    "WHERE status = 'active'",
+                    "WHERE status IN ('active', 'queued')",
                     (now_ts,),
                 )
                 await db.commit()
-            return rows
+            return active_rows, queued
+
+    async def enqueue_quizzes(
+        self, chat_id: int, items: list[tuple[int, str, list[str], str]],
+        created_by: int | None, now_ts: float,
+    ) -> int:
+        """Добавляет пачку вопросов в очередь чата. items: (приз, вопрос, ответы, показ)."""
+        db = self._require()
+        async with self._lock:
+            total = len(items)
+            for i, (prize, question, answers, display) in enumerate(items, 1):
+                await db.execute(
+                    "INSERT INTO quizzes (chat_id, question, answers, display_answer, "
+                    "prize, seq, total, status, created_by, created_ts) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                    (chat_id, question, "\n".join(answers), display,
+                     prize, i, total, created_by, now_ts),
+                )
+            await db.commit()
+            return total
+
+    async def activate_next_quiz(self, chat_id: int, now_ts: float) -> aiosqlite.Row | None:
+        """Продвигает первый вопрос из очереди в активные (если активного нет)."""
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT 1 FROM quizzes WHERE chat_id = ? AND status = 'active' LIMIT 1",
+                (chat_id,),
+            )
+            if await cur.fetchone() is not None:
+                return None
+            cur = await db.execute(
+                "SELECT * FROM quizzes WHERE chat_id = ? AND status = 'queued' "
+                "ORDER BY id LIMIT 1",
+                (chat_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            await db.execute(
+                "UPDATE quizzes SET status = 'active' WHERE id = ?",
+                (int(row["id"]),),
+            )
+            await db.commit()
+            return row
+
+    async def queued_count(self, chat_id: int) -> int:
+        cur = await self._require().execute(
+            "SELECT COUNT(*) AS c FROM quizzes WHERE chat_id = ? AND status = 'queued'",
+            (chat_id,),
+        )
+        return int((await cur.fetchone())["c"])
+
+    async def chats_with_queued(self) -> list[int]:
+        cur = await self._require().execute(
+            "SELECT DISTINCT chat_id FROM quizzes WHERE status = 'queued'"
+        )
+        return [int(r["chat_id"]) for r in await cur.fetchall()]
 
     # ---------- дуэли ----------
 

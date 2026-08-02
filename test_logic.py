@@ -251,10 +251,50 @@ async def run() -> None:
     assert await db.active_quiz(CHAT) is None
 
     quiz_id2 = await db.create_quiz(CHAT, "Ещё вопрос?", ["икс"], "икс", 1, 999, 6_000_200.0)
-    cancelled = await db.cancel_active_quizzes(6_000_300.0)
-    assert len(cancelled) == 1 and cancelled[0]["id"] == quiz_id2
+    actives, queued = await db.cancel_active_quizzes(6_000_300.0)
+    assert len(actives) == 1 and actives[0]["id"] == quiz_id2 and queued == 0
     assert await db.active_quiz(CHAT) is None
     assert await db.active_quiz_chat_ids() == []
+
+    # --- Пачка вопросов (очередь) ---
+    from handlers.quiz import parse_quiz_pack
+
+    items, bad = parse_quiz_pack("В1? | о1\n\n5 | В2? | о2; вар\nплохая строка")
+    assert len(items) == 2 and bad == [4], (items, bad)
+    assert items[1][0] == 5 and items[1][2] == ["о2", "вар"]
+
+    items, bad = parse_quiz_pack("В1? | а\nВ2? | б\nВ3? | в")
+    assert bad == [] and len(items) == 3
+    await db.enqueue_quizzes(CHAT, items, 999, 7_000_000.0)
+    assert await db.queued_count(CHAT) == 3
+    assert await db.active_quiz(CHAT) is None
+    assert CHAT in await db.chats_with_queued()
+
+    row1 = await db.activate_next_quiz(CHAT, 7_000_010.0)
+    assert row1 is not None and row1["seq"] == 1 and row1["total"] == 3
+    assert await db.activate_next_quiz(CHAT, 7_000_011.0) is None  # уже есть активный
+    assert await db.queued_count(CHAT) == 2
+
+    status, _, _ = await db.try_win_quiz(int(row1["id"]), CHAT, USER1, "tester", "Тестер", 7_000_020.0)
+    assert status == "ok"
+    row2 = await db.activate_next_quiz(CHAT, 7_000_021.0)
+    assert row2 is not None and row2["seq"] == 2
+
+    # Пропуск вопроса: отмена текущего + следующий из очереди
+    await db.cancel_quiz(int(row2["id"]), 7_000_030.0)
+    row3 = await db.activate_next_quiz(CHAT, 7_000_031.0)
+    assert row3 is not None and row3["seq"] == 3
+
+    actives, queued = await db.cancel_active_quizzes(7_000_040.0)
+    assert len(actives) == 1 and queued == 0
+    assert await db.chats_with_queued() == []
+
+    # Остановка с непустой очередью
+    await db.enqueue_quizzes(CHAT, items, 999, 7_000_100.0)
+    await db.activate_next_quiz(CHAT, 7_000_101.0)
+    actives, queued = await db.cancel_active_quizzes(7_000_102.0)
+    assert len(actives) == 1 and queued == 2
+    assert await db.queued_count(CHAT) == 0
 
     # --- Миграция старой базы (без колонки last_bonus_day) ---
     import sqlite3

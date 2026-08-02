@@ -30,7 +30,7 @@ from handlers import (
     user_router,
 )
 from handlers.common import current_window, is_bonus_hour
-from handlers.quiz import load_active_chats
+from handlers.quiz import load_active_chats, resume_queues
 
 logger = logging.getLogger("iriska-bot")
 
@@ -94,6 +94,7 @@ async def set_commands(bot: Bot, config: Config) -> None:
     # Личное меню админов: команды викторины
     admin_private = private_cmds + [
         BotCommand(command="quiz", description="Викторина: /quiz Вопрос | ответ"),
+        BotCommand(command="quizskip", description="Пропустить вопрос викторины"),
         BotCommand(command="quizstop", description="Остановить викторину"),
     ]
     for admin_id in config.admin_ids:
@@ -129,11 +130,11 @@ async def main() -> None:
     dp.include_router(games_router)
     dp.include_router(counting_router)
 
-    await load_active_chats(db)  # викторины, пережившие рестарт
-
     announcer = asyncio.create_task(bonus_hours_announcer(bot, db, config))
     try:
         await set_commands(bot, config)
+        await load_active_chats(db)   # викторины, пережившие рестарт
+        await resume_queues(bot, db)  # продолжаем очередь вопросов, если была
         me = await bot.get_me()
         logger.info("Запущен как @%s", me.username)
         if not config.admin_ids:

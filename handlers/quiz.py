@@ -1,5 +1,9 @@
-"""Викторины: админ создаёт вопрос в ЛС бота, бот публикует его в чат,
+"""Викторины: админ создаёт вопросы в ЛС бота, бот публикует их в чат,
 первый правильный ответ в чате забирает приз.
+
+Поддерживаются пачки: /quiz с несколькими строками — каждая строка вопрос.
+Бот проводит их по очереди: следующий вопрос публикуется после победы
+(или после /quizskip). Очередь хранится в базе и переживает рестарт.
 
 Роутер закрыт AdminFilter — команды викторины видит только админ.
 Проверка ответов участников встроена в счётчик сообщений
@@ -9,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from html import escape
@@ -29,14 +34,21 @@ router = Router(name="quiz")
 router.message.filter(AdminFilter())
 
 MAX_PRIZE = 1000
+NEXT_QUESTION_DELAY = 3  # секунд между победой и следующим вопросом
 
 USAGE = (
     "🧠 <b>Как создать викторину</b> (здесь, в ЛС):\n\n"
-    "<code>/quiz Вопрос | ответ</code>\n"
-    "Несколько верных вариантов: <code>/quiz Вопрос | ответ1; ответ2</code>\n"
-    "Свой приз: <code>/quiz 5 | Вопрос | ответ</code> (по умолчанию 1 🍬)\n\n"
-    "Бот опубликует вопрос в чат. Кто первым напишет правильный ответ — "
-    "получит приз. Остановить и показать ответ: /quizstop"
+    "Один вопрос:\n"
+    "<code>/quiz Вопрос | ответ</code>\n\n"
+    "Пачка — каждый вопрос с новой строки:\n"
+    "<code>/quiz\n"
+    "Столица Австралии? | Канберра\n"
+    "2+2? | 4; четыре\n"
+    "5 | Сложный вопрос? | ответ</code>\n\n"
+    "Бот публикует вопросы по очереди: следующий появляется после победы.\n"
+    "Несколько верных вариантов — через <code>;</code> • Свой приз — "
+    "<code>5 | Вопрос | ответ</code> (по умолчанию 1 🍬)\n\n"
+    "/quizskip — пропустить вопрос • /quizstop — остановить всё"
 )
 
 # Чаты, где прямо сейчас идёт викторина — кеш, чтобы не дёргать базу
@@ -47,6 +59,22 @@ active_chats: set[int] = set()
 async def load_active_chats(db: Database) -> None:
     active_chats.clear()
     active_chats.update(await db.active_quiz_chat_ids())
+
+
+async def resume_queues(bot: Bot, db: Database) -> None:
+    """После рестарта: если в чате остались вопросы без активного — продолжаем."""
+    for chat_id in await db.chats_with_queued():
+        row = await db.activate_next_quiz(chat_id, time.time())
+        if row is None:
+            continue
+        try:
+            await bot.send_message(
+                chat_id,
+                quiz_text(row["question"], row["prize"], row["seq"], row["total"]),
+            )
+            active_chats.add(chat_id)
+        except Exception as e:
+            logger.warning("Не смог продолжить викторину в чате %s: %s", chat_id, e)
 
 
 def parse_quiz_args(raw: str) -> tuple[int, str, list[str], str] | None:
@@ -76,9 +104,28 @@ def parse_quiz_args(raw: str) -> tuple[int, str, list[str], str] | None:
     return prize, question, answers, display
 
 
-def quiz_text(question: str, prize: int) -> str:
+def parse_quiz_pack(raw: str) -> tuple[list[tuple[int, str, list[str], str]], list[int]]:
+    """Разбирает многострочный ввод. Возвращает (вопросы, номера ошибочных строк)."""
+    items: list[tuple[int, str, list[str], str]] = []
+    bad: list[int] = []
+    for line_no, line in enumerate((raw or "").splitlines(), 1):
+        if not line.strip():
+            continue
+        parsed = parse_quiz_args(line)
+        if parsed is None:
+            bad.append(line_no)
+        else:
+            items.append(parsed)
+    return items, bad
+
+
+def quiz_text(question: str, prize: int, seq: int = 1, total: int = 1) -> str:
+    header = "🧠 <b>ВИКТОРИНА!</b>"
+    if total > 1:
+        header += f" Вопрос {seq}/{total}."
+    header += f" Приз: 🍬 <b>{fmt(prize)}</b>"
     return (
-        f"🧠 <b>ВИКТОРИНА!</b> Приз: 🍬 <b>{fmt(prize)}</b>\n\n"
+        f"{header}\n\n"
         f"❓ {escape(question)}\n\n"
         "Кто первым напишет правильный ответ в чат — тот и забирает приз!"
     )
@@ -86,11 +133,16 @@ def quiz_text(question: str, prize: int) -> str:
 
 @router.message(F.chat.type == ChatType.PRIVATE, Command("quiz"))
 async def cmd_quiz(message: Message, command: CommandObject, db: Database, bot: Bot) -> None:
-    parsed = parse_quiz_args(command.args or "")
-    if parsed is None:
+    items, bad = parse_quiz_pack(command.args or "")
+    if bad:
+        await message.reply(
+            "⚠️ Не понял строки: " + ", ".join(map(str, bad)) +
+            ".\nФормат каждой строки: <code>Вопрос | ответ</code> — поправь и пришли заново."
+        )
+        return
+    if not items:
         await message.reply(USAGE)
         return
-    prize, question, answers, display = parsed
 
     chats = await db.known_chats()
     if not chats:
@@ -100,36 +152,42 @@ async def cmd_quiz(message: Message, command: CommandObject, db: Database, bot: 
         )
         return
 
-    sent = 0
-    busy = 0
+    now = time.time()
+    posted = 0
+    appended = 0
     for chat_id in chats:
-        if await db.active_quiz(chat_id) is not None:
-            busy += 1
+        had_active = (await db.active_quiz(chat_id)) is not None
+        await db.enqueue_quizzes(chat_id, items, message.from_user.id if message.from_user else None, now)
+        if had_active:
+            appended += 1
             continue
-        quiz_id = await db.create_quiz(
-            chat_id, question, answers, display, prize,
-            message.from_user.id if message.from_user else None, time.time(),
-        )
+        row = await db.activate_next_quiz(chat_id, now)
+        if row is None:
+            continue
         try:
-            await bot.send_message(chat_id, quiz_text(question, prize))
+            await bot.send_message(
+                chat_id,
+                quiz_text(row["question"], row["prize"], row["seq"], row["total"]),
+            )
+            active_chats.add(chat_id)
+            posted += 1
         except Exception as e:
             logger.warning("Викторина не ушла в чат %s: %s", chat_id, e)
-            await db.cancel_quiz(quiz_id, time.time())
-            continue
-        active_chats.add(chat_id)
-        sent += 1
+            await db.cancel_quiz(int(row["id"]), now)
 
     lines = []
-    if sent:
-        lines.append(f"✅ Викторина опубликована! Приз: 🍬 {fmt(prize)}")
-        lines.append("Остановить и показать ответ: /quizstop")
+    if len(items) == 1:
+        lines.append("✅ Викторина опубликована!" if posted else "Вопрос добавлен.")
     else:
-        lines.append("Не получилось опубликовать викторину.")
-    if busy:
         lines.append(
-            f"⚠️ Пропущено чатов с уже идущей викториной: {busy}. "
-            "Сначала останови её: /quizstop"
+            f"✅ Принял {len(items)} вопросов — публикую по очереди: "
+            "следующий появляется после победы."
         )
+    if appended:
+        lines.append(
+            "⚠️ В чате уже шла викторина — новые вопросы добавлены в очередь."
+        )
+    lines.append("Пропустить вопрос: /quizskip • Остановить всё: /quizstop")
     await message.reply("\n".join(lines))
 
 
@@ -141,24 +199,67 @@ async def cmd_quiz_in_group(message: Message) -> None:
     )
 
 
-@router.message(Command("quizstop"))
-async def cmd_quizstop(message: Message, db: Database, bot: Bot) -> None:
-    rows = await db.cancel_active_quizzes(time.time())
-    if not rows:
-        await message.reply("Активных викторин нет.")
-        return
-    for row in rows:
-        chat_id = int(row["chat_id"])
-        active_chats.discard(chat_id)
+@router.message(Command("quizskip"))
+async def cmd_quizskip(message: Message, db: Database, bot: Bot) -> None:
+    if message.chat.type == ChatType.PRIVATE:
+        chat_ids = await db.active_quiz_chat_ids()
+    else:
+        chat_ids = [message.chat.id]
+
+    skipped = 0
+    for chat_id in chat_ids:
+        quiz = await db.active_quiz(chat_id)
+        if quiz is None:
+            continue
+        now = time.time()
+        await db.cancel_quiz(int(quiz["id"]), now)
+        skipped += 1
+        nxt = await db.activate_next_quiz(chat_id, now)
         try:
             await bot.send_message(
                 chat_id,
-                "🛑 Викторина остановлена. Правильный ответ: "
-                f"<b>{escape(row['display_answer'])}</b>",
+                "⏭ Вопрос пропущен. Ответ был: "
+                f"<b>{escape(quiz['display_answer'])}</b>",
             )
+            if nxt is not None:
+                await bot.send_message(
+                    chat_id,
+                    quiz_text(nxt["question"], nxt["prize"], nxt["seq"], nxt["total"]),
+                )
+        except Exception as e:
+            logger.warning("Не смог написать в чат %s: %s", chat_id, e)
+        if nxt is None:
+            active_chats.discard(chat_id)
+
+    if skipped:
+        await message.reply(f"⏭ Пропущено вопросов: {skipped}")
+    else:
+        await message.reply("Активных викторин нет.")
+
+
+@router.message(Command("quizstop"))
+async def cmd_quizstop(message: Message, db: Database, bot: Bot) -> None:
+    actives, queued = await db.cancel_active_quizzes(time.time())
+    if not actives and queued == 0:
+        await message.reply("Активных викторин нет.")
+        return
+    for row in actives:
+        chat_id = int(row["chat_id"])
+        active_chats.discard(chat_id)
+        text = (
+            "🛑 Викторина остановлена. Правильный ответ: "
+            f"<b>{escape(row['display_answer'])}</b>"
+        )
+        if queued:
+            text += "\nОчередь вопросов очищена."
+        try:
+            await bot.send_message(chat_id, text)
         except Exception as e:
             logger.warning("Не смог сообщить об остановке в чат %s: %s", chat_id, e)
-    await message.reply(f"Остановлено викторин: {len(rows)}")
+    parts = [f"Остановлено викторин: {len(actives)}"]
+    if queued:
+        parts.append(f"удалено из очереди: {queued}")
+    await message.reply(", ".join(parts) + ".")
 
 
 async def handle_possible_answer(message: Message, db: Database) -> None:
@@ -180,10 +281,28 @@ async def handle_possible_answer(message: Message, db: Database) -> None:
     )
     if status != "ok":
         return  # кто-то успел на мгновение раньше
-    active_chats.discard(chat_id)
     await message.reply(
         f"🎉 <b>Правильно!</b> {display_name(user.first_name, user.username)} "
         f"первым дал верный ответ («{escape(quiz['display_answer'])}») "
         f"и получает 🍬 <b>+{fmt(prize)}</b>!\n"
         f"Баланс: <b>{fmt(balance)}</b> {iriski(balance)}"
     )
+
+    # Очередь: публикуем следующий вопрос после короткой паузы
+    nxt = await db.activate_next_quiz(chat_id, time.time())
+    if nxt is None:
+        active_chats.discard(chat_id)
+        remaining_done = quiz["total"] > 1 and quiz["seq"] == quiz["total"]
+        if remaining_done:
+            try:
+                await message.answer("🏁 Викторина окончена — все вопросы отыграны!")
+            except Exception:
+                pass
+        return
+    await asyncio.sleep(NEXT_QUESTION_DELAY)
+    try:
+        await message.answer(
+            quiz_text(nxt["question"], nxt["prize"], nxt["seq"], nxt["total"])
+        )
+    except Exception as e:
+        logger.warning("Следующий вопрос не ушёл в чат %s: %s", chat_id, e)
