@@ -117,17 +117,21 @@ async def run() -> None:
     assert totals["msgs"] == 256
     assert totals["earned"] == 300  # 2 за активность + 298 бонусом
 
-    # --- Ежедневный бонус ---
-    status, bal = await db.claim_bonus(CHAT, USER1, "tester", "Тестер", "2026-08-01", 2)
-    assert status == "ok" and bal == 2  # баланс был 0 после вывода
-    status, bal2 = await db.claim_bonus(CHAT, USER1, "tester", "Тестер", "2026-08-01", 2)
-    assert status == "already" and bal2 == 2, "бонус выдался дважды за день"
-    status, bal3 = await db.claim_bonus(CHAT, USER1, "tester", "Тестер", "2026-08-02", 1)
-    assert status == "ok" and bal3 == 3, "бонус не выдался на следующий день"
+    # --- Ежедневный бонус со стриком ---
+    status, bal, amt, streak = await db.claim_bonus(
+        CHAT, USER1, "tester", "Тестер", "2026-08-01", "2026-07-31", 2, 3)
+    assert status == "ok" and bal == 2 and amt == 2 and streak == 1
+    status, bal2, amt, streak = await db.claim_bonus(
+        CHAT, USER1, "tester", "Тестер", "2026-08-01", "2026-07-31", 2, 3)
+    assert status == "already" and bal2 == 2 and streak == 1, "бонус выдался дважды за день"
+    status, bal3, amt, streak = await db.claim_bonus(
+        CHAT, USER1, "tester", "Тестер", "2026-08-02", "2026-08-01", 1, 3)
+    assert status == "ok" and streak == 2 and amt == 2, "стрик не вырос"  # 1 базовый +1 стрик
+    assert bal3 == 4
 
     # --- Дуэли ---
-    # USER1: 3, USER2: 0 -> выравниваем балансы
-    await db.adjust_balance(CHAT, USER1, 47, "тест", None)   # 50
+    # USER1: 4, USER2: 0 -> выравниваем балансы
+    await db.adjust_balance(CHAT, USER1, 46, "тест", None)   # 50
     await db.adjust_balance(CHAT, USER2, 50, "тест", None)   # 50
 
     now = 3_000_000.0
@@ -226,6 +230,27 @@ async def run() -> None:
     assert r3["total_counted"] == 50, "счётчик сообщений должен остаться честным"
     assert await db.user_count_on(CHAT, USER3, "2026-08-01") == 50
 
+    # --- Стрик: рост, потолок и сброс ---
+    USER5 = 555_001
+    expected = [
+        ("2026-08-10", "2026-08-09", 2, 1),   # день 1: базовый 2
+        ("2026-08-11", "2026-08-10", 3, 2),   # +1
+        ("2026-08-12", "2026-08-11", 4, 3),   # +2
+        ("2026-08-13", "2026-08-12", 5, 4),   # +3 (потолок)
+        ("2026-08-14", "2026-08-13", 5, 5),   # прибавка не растёт выше потолка
+    ]
+    bal_run = 0
+    for day, yest, want_amt, want_streak in expected:
+        status, bal_run, amt, streak = await db.claim_bonus(
+            CHAT, USER5, "st", "Стрикер", day, yest, 2, 3)
+        assert status == "ok" and amt == want_amt and streak == want_streak, (day, amt, streak)
+    assert bal_run == 2 + 3 + 4 + 5 + 5
+
+    # Пропустил день — серия сгорела
+    status, bal_run, amt, streak = await db.claim_bonus(
+        CHAT, USER5, "st", "Стрикер", "2026-08-20", "2026-08-19", 2, 3)
+    assert status == "ok" and amt == 2 and streak == 1, "стрик не сбросился после пропуска"
+
     # --- Викторина ---
     from handlers.quiz import parse_quiz_args
 
@@ -318,10 +343,11 @@ async def run() -> None:
 
     old_db = Database(old_path)
     await old_db.connect()  # должна пройти миграция
-    status, bal = await old_db.claim_bonus(CHAT, 777, "old", "Старый", "2026-08-01", 2)
-    assert status == "ok" and bal == 44, "миграция/бонус на старой базе не сработали"
+    status, bal, amt, streak = await old_db.claim_bonus(
+        CHAT, 777, "old", "Старый", "2026-08-01", "2026-07-31", 2, 3)
+    assert status == "ok" and bal == 44 and streak == 1, "миграция/бонус на старой базе не сработали"
     row = await old_db.get_user(CHAT, 777)
-    assert row["balance"] == 44
+    assert row["balance"] == 44 and row["bonus_streak"] == 1
     await old_db.close()
 
     await db.close()

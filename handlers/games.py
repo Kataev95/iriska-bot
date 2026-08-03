@@ -19,8 +19,8 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GroupF, today_day, trig
-from texts import display_name, fmt, iriski
+from handlers.common import GroupF, today_day, trig, yesterday_day
+from texts import days, display_name, fmt, iriski
 
 router = Router(name="games")
 
@@ -78,21 +78,35 @@ async def cmd_bonus(message: Message, db: Database, config: Config) -> None:
         return
     lo = max(config.bonus_min, 0)
     hi = max(config.bonus_max, lo)
-    amount = lo + (secrets.randbelow(hi - lo + 1) if hi > lo else 0)
-    status, balance = await db.claim_bonus(
+    base = lo + (secrets.randbelow(hi - lo + 1) if hi > lo else 0)
+    cap = max(config.streak_max_extra, 0)
+    status, balance, amount, streak = await db.claim_bonus(
         message.chat.id, user.id, user.username, user.first_name,
-        today_day(config), amount,
+        today_day(config), yesterday_day(config), base, cap,
     )
     if status == "already":
+        streak_note = f" Стрик: 🔥 {streak} {days(streak)}." if streak else ""
         await message.reply(
-            f"Ты уже забирал бонус сегодня 😉\n"
+            f"Ты уже забирал бонус сегодня 😉{streak_note}\n"
             f"Баланс: 🍬 <b>{fmt(balance)}</b>. Возвращайся завтра!"
         )
-    else:
-        await message.reply(
-            f"🎁 Ежедневный бонус: <b>+{amount}</b> 🍬\n"
-            f"Баланс: <b>{fmt(balance)}</b> {iriski(balance)}. Завтра будет ещё!"
-        )
+        return
+    extra = min(max(streak - 1, 0), cap)
+    lines = [f"🎁 Ежедневный бонус: <b>+{amount}</b> 🍬"]
+    if cap > 0:
+        streak_line = f"🔥 Стрик: <b>{streak}</b> {days(streak)}"
+        if extra >= cap:
+            streak_line += " — максимальная прибавка!"
+        elif extra:
+            streak_line += f" (+{extra} к бонусу)"
+        else:
+            streak_line += " — заходи завтра, бонус вырастет!"
+        lines.append(streak_line)
+    lines.append(
+        f"Баланс: <b>{fmt(balance)}</b> {iriski(balance)}. "
+        "Не пропусти завтра — стрик сгорает за день пропуска 😉"
+    )
+    await message.reply("\n".join(lines))
 
 
 # ---------- казино (слоты) ----------
@@ -338,7 +352,12 @@ async def cmd_cancel_duel(message: Message, db: Database, config: Config) -> Non
 async def cmd_games(message: Message, config: Config) -> None:
     await message.reply(
         "🎮 <b>Игры и бонусы</b>\n\n"
-        f"🎁 <b>Бонус</b> — напиши «бонус»: раз в день +{config.bonus_min}–{max(config.bonus_max, config.bonus_min)} 🍬\n\n"
+        f"🎁 <b>Бонус</b> — напиши «бонус»: раз в день +{config.bonus_min}–{max(config.bonus_max, config.bonus_min)} 🍬"
+        + (
+            f", за каждый день подряд бонус растёт (до +{config.streak_max_extra})"
+            if config.streak_max_extra > 0 else ""
+        )
+        + "\n\n"
         f"🎰 <b>Слоты</b> — «казино 10» (ставка {fmt(config.casino_min_bet)}–{fmt(config.casino_max_bet)} 🍬):\n"
         "7️⃣7️⃣7️⃣ — х10 • три одинаковых — х5 • две семёрки — возврат\n\n"
         f"⚔️ <b>Дуэль</b> — ответь «дуэль 10» на сообщение соперника "

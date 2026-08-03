@@ -103,6 +103,10 @@ class Database:
         cols = {row["name"] for row in await cur.fetchall()}
         if "last_bonus_day" not in cols:
             await db.execute("ALTER TABLE users ADD COLUMN last_bonus_day TEXT")
+        if "bonus_streak" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN bonus_streak INTEGER NOT NULL DEFAULT 0"
+            )
         cur = await db.execute("PRAGMA table_info(quizzes)")
         qcols = {row["name"] for row in await cur.fetchall()}
         if qcols and "seq" not in qcols:
@@ -356,9 +360,18 @@ class Database:
     async def claim_bonus(
         self, chat_id: int, user_id: int,
         username: str | None, first_name: str | None,
-        day: str, amount: int,
-    ) -> tuple[str, int]:
-        """Выдаёт бонус раз в день. Возвращает ("ok" | "already", баланс)."""
+        day: str, yesterday: str, base_amount: int, extra_cap: int,
+    ) -> tuple[str, int, int, int]:
+        """Выдаёт бонус раз в день с учётом серии (стрика).
+
+        Если вчера бонус тоже забирали — серия растёт и добавляет к бонусу
+        (+1 за каждый день серии сверх первого, но не больше extra_cap).
+        Пропуск дня сбрасывает серию.
+
+        Возвращает (статус, баланс, начислено, серия):
+        - ("ok", новый баланс, сумма бонуса, длина серии)
+        - ("already", баланс, 0, текущая серия)
+        """
         db = self._require()
         async with self._lock:
             await db.execute(
@@ -372,19 +385,26 @@ class Database:
                 (chat_id, user_id, username, first_name),
             )
             cur = await db.execute(
-                "SELECT balance, last_bonus_day FROM users "
+                "SELECT balance, last_bonus_day, bonus_streak FROM users "
                 "WHERE chat_id = ? AND user_id = ?",
                 (chat_id, user_id),
             )
             row = await cur.fetchone()
             if row["last_bonus_day"] == day:
                 await db.commit()
-                return "already", int(row["balance"])
+                return "already", int(row["balance"]), 0, int(row["bonus_streak"] or 0)
+            if row["last_bonus_day"] == yesterday:
+                streak = int(row["bonus_streak"] or 0) + 1
+            else:
+                streak = 1
+            extra = min(max(streak - 1, 0), max(extra_cap, 0))
+            amount = base_amount + extra
             new_balance = row["balance"] + amount
             await db.execute(
                 "UPDATE users SET balance = ?, earned_total = earned_total + ?, "
-                "last_bonus_day = ? WHERE chat_id = ? AND user_id = ?",
-                (new_balance, amount, day, chat_id, user_id),
+                "last_bonus_day = ?, bonus_streak = ? "
+                "WHERE chat_id = ? AND user_id = ?",
+                (new_balance, amount, day, streak, chat_id, user_id),
             )
             await db.execute(
                 "INSERT INTO ledger (chat_id, user_id, amount, reason) "
@@ -392,7 +412,7 @@ class Database:
                 (chat_id, user_id, amount),
             )
             await db.commit()
-            return "ok", new_balance
+            return "ok", new_balance, amount, streak
 
     # ---------- викторины ----------
 

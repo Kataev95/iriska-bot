@@ -26,6 +26,10 @@ def msgs(n: int) -> str:
     return plural(n, "сообщение", "сообщения", "сообщений")
 
 
+def days(n: int) -> str:
+    return plural(n, "день", "дня", "дней")
+
+
 def fmt(n: int) -> str:
     """12345 -> '12 345'."""
     return f"{int(n):,}".replace(",", " ")

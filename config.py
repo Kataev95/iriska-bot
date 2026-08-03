@@ -83,6 +83,7 @@ class Config:
     bonus_enabled: bool
     bonus_min: int
     bonus_max: int
+    streak_max_extra: int
     games_enabled: bool
     casino_min_bet: int
     casino_max_bet: int
@@ -117,6 +118,7 @@ def load_config() -> Config:
         bonus_enabled=_bool_env("BONUS_ENABLED", True),
         bonus_min=_int_env("BONUS_MIN", 1),
         bonus_max=_int_env("BONUS_MAX", 2),
+        streak_max_extra=_int_env("STREAK_MAX_EXTRA", 3),
         games_enabled=_bool_env("GAMES_ENABLED", True),
         casino_min_bet=_int_env("CASINO_MIN_BET", 1),
         casino_max_bet=_int_env("CASINO_MAX_BET", 50),

@@ -9,7 +9,7 @@ from aiogram.enums import ChatType
 
 from config import Config
 from db import Database
-from texts import display_name, fmt, iriski, msgs
+from texts import days, display_name, fmt, iriski, msgs
 
 GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 GroupF = F.chat.type.in_(GROUP_TYPES)
@@ -57,8 +57,19 @@ def today_day(config: Config) -> str:
     return datetime.now(config.tz).strftime("%Y-%m-%d")
 
 
+def yesterday_day(config: Config) -> str:
+    return (datetime.now(config.tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 def week_ago_day(config: Config) -> str:
     return (datetime.now(config.tz) - timedelta(days=6)).strftime("%Y-%m-%d")
+
+
+def current_streak(row, config: Config) -> int:
+    """Живая серия бонусов: считается, пока последний бонус был сегодня или вчера."""
+    if row["last_bonus_day"] in (today_day(config), yesterday_day(config)):
+        return int(row["bonus_streak"] or 0)
+    return 0
 
 
 async def build_profile(db: Database, config: Config, chat_id: int, row) -> str:
@@ -80,6 +91,9 @@ async def build_profile(db: Database, config: Config, chat_id: int, row) -> str:
         f"🍬 Ириски: <b>{fmt(balance)}</b> (всего заработано: {fmt(row['earned_total'])})",
         f"⏳ До следующей ириски: {fmt(to_next)} {msgs(to_next)}",
     ]
+    streak = current_streak(row, config)
+    if streak:
+        lines.append(f"🔥 Стрик бонуса: <b>{streak}</b> {days(streak)}")
     if balance >= config.withdraw_threshold:
         lines.append(f"✅ <b>Можно выводить!</b> Пиши {config.admin_contact}")
     else:
