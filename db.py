@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS quizzes (
     resolved_ts    REAL
 );
 
+CREATE TABLE IF NOT EXISTS bot_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_daily_chat_day ON daily_stats (chat_id, day);
 CREATE INDEX IF NOT EXISTS idx_users_top ON users (chat_id, total_counted DESC);
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (chat_id, user_id);
@@ -316,6 +321,86 @@ class Database:
             (chat_id,),
         )
         return await cur.fetchone()
+
+    # ---------- месячный цикл статистики ----------
+
+    async def ensure_stats_period(self, period: str) -> str:
+        """Инициализирует текущий месяц статистики и возвращает его ключ YYYY-MM."""
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "INSERT OR IGNORE INTO bot_meta (key, value) VALUES ('stats_period', ?)",
+                (period,),
+            )
+            cur = await db.execute(
+                "SELECT value FROM bot_meta WHERE key = 'stats_period'"
+            )
+            row = await cur.fetchone()
+            await db.commit()
+            return str(row["value"])
+
+    async def close_stats_period(
+        self, expected_period: str, next_period: str, now_ts: float,
+    ) -> list[dict] | None:
+        """Снимает месячные итоги и атомарно обнуляет статистику и балансы.
+
+        Возвращает снимки по чатам. Если другой вызов уже закрыл этот период,
+        возвращает None — это защищает от повторного анонса после рестарта.
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT value FROM bot_meta WHERE key = 'stats_period'"
+            )
+            row = await cur.fetchone()
+            if row is None or row["value"] != expected_period:
+                return None
+
+            cur = await db.execute("SELECT DISTINCT chat_id FROM users ORDER BY chat_id")
+            chat_ids = [int(r["chat_id"]) for r in await cur.fetchall()]
+            snapshots: list[dict] = []
+            for chat_id in chat_ids:
+                cur = await db.execute(
+                    "SELECT user_id, username, first_name, total_counted, balance "
+                    "FROM users WHERE chat_id = ? AND total_counted > 0 "
+                    "ORDER BY total_counted DESC, user_id LIMIT 10",
+                    (chat_id,),
+                )
+                top = [dict(r) for r in await cur.fetchall()]
+                cur = await db.execute(
+                    "SELECT COUNT(*) AS users, COALESCE(SUM(total_counted), 0) AS msgs, "
+                    "COALESCE(SUM(balance), 0) AS balance "
+                    "FROM users WHERE chat_id = ? AND total_counted > 0",
+                    (chat_id,),
+                )
+                totals = dict(await cur.fetchone())
+                snapshots.append(
+                    {"chat_id": chat_id, "top": top, "totals": totals}
+                )
+
+            # Сгорание остаётся в журнале, чтобы экономику можно было проверить.
+            await db.execute(
+                "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                "SELECT chat_id, user_id, -balance, 'ежемесячное сгорание' "
+                "FROM users WHERE balance > 0"
+            )
+            await db.execute(
+                "UPDATE users SET total_counted = 0, balance = 0, earned_total = 0, "
+                "progress = 0, last_counted_ts = 0, last_msg_hash = NULL, "
+                "last_bonus_day = NULL, bonus_streak = 0"
+            )
+            await db.execute("DELETE FROM daily_stats")
+            await db.execute(
+                "UPDATE duels SET status = 'cancelled', resolved_ts = ? "
+                "WHERE status = 'pending'",
+                (now_ts,),
+            )
+            await db.execute(
+                "UPDATE bot_meta SET value = ? WHERE key = 'stats_period'",
+                (next_period,),
+            )
+            await db.commit()
+            return snapshots
 
     # ---------- ириски (админ) ----------
 

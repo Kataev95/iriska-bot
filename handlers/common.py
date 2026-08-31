@@ -84,7 +84,7 @@ async def build_profile(db: Database, config: Config, chat_id: int, row) -> str:
     lines = [
         f"📊 <b>{display_name(row['first_name'], row['username'])}</b>",
         "",
-        f"✉️ Сообщений: <b>{fmt(row['total_counted'])}</b> "
+        f"✉️ Сообщений за месяц: <b>{fmt(row['total_counted'])}</b> "
         f"(сегодня: {fmt(cnt_today)}, за 7 дней: {fmt(cnt_week)})",
         f"🏆 Место в чате: <b>#{rank}</b>",
         "",

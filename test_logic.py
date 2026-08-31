@@ -8,8 +8,10 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from datetime import datetime
 
 from db import Database
+from monthly import monthly_summary_text, stats_period_for
 
 CHAT = -1001234567890
 USER1 = 111
@@ -320,6 +322,57 @@ async def run() -> None:
     actives, queued = await db.cancel_active_quizzes(7_000_102.0)
     assert len(actives) == 1 and queued == 2
     assert await db.queued_count(CHAT) == 0
+
+    # --- Месячный сброс в 23:59 последнего дня ---
+    assert stats_period_for(datetime(2026, 8, 31, 23, 58)) == "2026-08"
+    assert stats_period_for(datetime(2026, 8, 31, 23, 59)) == "2026-09"
+    assert stats_period_for(datetime(2026, 2, 28, 23, 59)) == "2026-03"
+    assert stats_period_for(datetime(2026, 12, 31, 23, 59)) == "2027-01"
+
+    month_path = os.path.join(tmp, "month.db")
+    month_db = Database(month_path)
+    await month_db.connect()
+    for i in range(5):
+        await month_db.try_count_message(
+            chat_id=CHAT, user_id=USER1, username="first", first_name="Первый",
+            day="2026-08-31", msg_hash=f"m1-{i}", now_ts=8_000_000 + i,
+            cooldown=0, per_iriska=100, dedupe=False,
+        )
+    for i in range(3):
+        await month_db.try_count_message(
+            chat_id=CHAT, user_id=USER2, username="second", first_name="Второй",
+            day="2026-08-31", msg_hash=f"m2-{i}", now_ts=8_000_100 + i,
+            cooldown=0, per_iriska=100, dedupe=False,
+        )
+    await month_db.adjust_balance(CHAT, USER1, 12, "тест", None)
+    await month_db.adjust_balance(CHAT, USER2, 7, "тест", None)
+    duel_id = await month_db.create_duel(CHAT, USER1, USER2, 5, 8_000_200)
+    assert duel_id > 0
+    assert await month_db.ensure_stats_period("2026-08") == "2026-08"
+
+    snapshots = await month_db.close_stats_period(
+        "2026-08", "2026-09", 8_000_300,
+    )
+    assert snapshots is not None and len(snapshots) == 1
+    assert [r["user_id"] for r in snapshots[0]["top"]] == [USER1, USER2]
+    assert snapshots[0]["totals"]["msgs"] == 8
+    summary = monthly_summary_text("2026-08", snapshots[0])
+    assert "Август 2026 подошёл к концу" in summary
+    assert "итоги августа 2026" in summary
+    assert "все накопленные ириски сгорели" in summary
+
+    for user_id in (USER1, USER2):
+        row = await month_db.get_user(CHAT, user_id)
+        assert row["total_counted"] == 0 and row["balance"] == 0
+        assert row["earned_total"] == 0 and row["progress"] == 0
+        assert row["last_bonus_day"] is None and row["bonus_streak"] == 0
+    assert await month_db.user_count_since(CHAT, USER1, "2000-01-01") == 0
+    assert not await month_db.has_pending_duel(CHAT, USER1)
+    assert await month_db.close_stats_period(
+        "2026-08", "2026-09", 8_000_301,
+    ) is None, "месяц нельзя закрыть дважды"
+    assert await month_db.ensure_stats_period("2026-10") == "2026-09"
+    await month_db.close()
 
     # --- Миграция старой базы (без колонки last_bonus_day) ---
     import sqlite3
