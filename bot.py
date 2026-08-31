@@ -31,6 +31,7 @@ from handlers import (
 )
 from handlers.common import current_window, is_bonus_hour
 from handlers.quiz import load_active_chats, resume_queues
+from monthly import monthly_stats_announcer
 
 logger = logging.getLogger("iriska-bot")
 
@@ -75,7 +76,7 @@ async def set_commands(bot: Bot, config: Config) -> None:
         BotCommand(command="me", description="Моя статистика и ириски"),
         BotCommand(command="balance", description="Баланс ирисок"),
         BotCommand(command="bonus", description="Ежедневный бонус 🎁"),
-        BotCommand(command="top", description="Топ чата за всё время"),
+        BotCommand(command="top", description="Топ чата за текущий месяц"),
         BotCommand(command="week", description="Топ за 7 дней"),
         BotCommand(command="day", description="Топ за сегодня"),
         BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
@@ -131,6 +132,9 @@ async def main() -> None:
     dp.include_router(counting_router)
 
     announcer = asyncio.create_task(bonus_hours_announcer(bot, db, config))
+    monthly_announcer = asyncio.create_task(
+        monthly_stats_announcer(bot, db, config)
+    )
     try:
         await set_commands(bot, config)
         await load_active_chats(db)   # викторины, пережившие рестарт
@@ -146,6 +150,10 @@ async def main() -> None:
         await dp.start_polling(bot, allowed_updates=["message"])
     finally:
         announcer.cancel()
+        monthly_announcer.cancel()
+        await asyncio.gather(
+            announcer, monthly_announcer, return_exceptions=True
+        )
         await db.close()
 
 

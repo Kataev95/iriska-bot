@@ -80,7 +80,7 @@ async def cmd_top(message: Message, db: Database, config: Config) -> None:
         await message.reply("Пока никто ничего не наболтал 😴 Начните общаться!")
         return
     totals = await db.chat_totals(message.chat.id)
-    lines = ["🏆 <b>Топ чата за всё время</b>", ""]
+    lines = ["🏆 <b>Топ чата за текущий месяц</b>", ""]
     for i, r in enumerate(rows, 1):
         lines.append(
             f"{place(i)} {display_name(r['first_name'], r['username'])} — "
