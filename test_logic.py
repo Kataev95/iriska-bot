@@ -404,7 +404,332 @@ async def run() -> None:
     await old_db.close()
 
     await db.close()
+
+    await run_subscription()
     print("✅ Все тесты пройдены")
+
+
+# ---------------------------------------------------------------------------
+# Бонус только для подписчиков канала
+# ---------------------------------------------------------------------------
+
+async def run_subscription() -> None:
+    tmp = tempfile.mkdtemp()
+    db = Database(os.path.join(tmp, "subscription.db"))
+    await db.connect()
+    try:
+        await _check_subscription(db)
+    finally:
+        await db.close()  # иначе при падении проверки процесс не завершится
+
+
+async def _check_subscription(db: Database) -> None:
+    """Проверка подписки по ID: разбор настроек, ответы бота, сбои, самопроверка.
+
+    Берётся настоящий Dispatcher с настоящими роутерами и объектами aiogram,
+    а сеть подменена: фейковая сессия отвечает на getChatMember по сценарию
+    и запоминает всё, что бот отправил в чат.
+    """
+    import datetime
+    import logging
+    from dataclasses import replace
+    from unittest import mock
+
+    from aiogram import Bot, Dispatcher
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.client.session.base import BaseSession
+    from aiogram.enums import ParseMode
+    from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+    from aiogram.methods import GetChat, GetChatMember, GetMe, SendMessage
+    from aiogram.types import (
+        Chat, ChatFullInfo, ChatMemberAdministrator, ChatMemberBanned,
+        ChatMemberLeft, ChatMemberMember, ChatMemberOwner, ChatMemberRestricted,
+        InlineKeyboardMarkup, Message, Update, User,
+    )
+
+    from config import load_config, normalize_channel_url, parse_channel_ref
+    from handlers import (
+        admin_router, counting_router, games_router, quiz_router, user_router,
+    )
+    from subscription import setup_channel
+
+    # --- Разбор CHANNEL_ID / CHANNEL_URL ---
+    assert parse_channel_ref("") is None
+    assert parse_channel_ref("-1001234567890") == -1001234567890
+    assert parse_channel_ref("1234567890") == -1001234567890, "ID из ссылки t.me/c/... без -100"
+    for raw in ("@mychannel", "mychannel", "https://t.me/mychannel", "t.me/mychannel/"):
+        assert parse_channel_ref(raw) == "@mychannel", raw
+    for raw in ("https://t.me/+AbCdEf", "два слова", "ab"):
+        try:
+            parse_channel_ref(raw)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{raw!r} должно считаться ошибкой")
+    assert normalize_channel_url("") == ""
+    assert normalize_channel_url("t.me/mychannel") == "https://t.me/mychannel"
+    assert normalize_channel_url("@mychannel") == "https://t.me/mychannel"
+    assert normalize_channel_url("https://t.me/+AbCd") == "https://t.me/+AbCd"
+
+    env = {"BOT_TOKEN": "123456:test", "CHANNEL_ID": "", "CHANNEL_URL": ""}
+    with mock.patch.dict(os.environ, env):
+        base_cfg = load_config()
+    assert base_cfg.channel_id is None and base_cfg.channel_url == "", \
+        "по умолчанию проверка подписки выключена"
+    with mock.patch.dict(os.environ, {**env, "CHANNEL_ID": "@Iriska_Channel",
+                                      "CHANNEL_URL": "t.me/Iriska_Channel"}):
+        cfg = load_config()
+    assert cfg.channel_id == "@Iriska_Channel"
+    assert cfg.channel_url == "https://t.me/Iriska_Channel"
+    with mock.patch.dict(os.environ, {**env, "CHANNEL_ID": "@Iriska_Channel"}):
+        assert load_config().channel_url == "https://t.me/Iriska_Channel", \
+            "для @username ссылка строится сама, без CHANNEL_URL"
+    with mock.patch.dict(os.environ, {**env, "CHANNEL_ID": "-1001234567890"}):
+        assert load_config().channel_url == "", "для числового ID ссылку без сети не узнать"
+    with mock.patch.dict(os.environ, {**env, "CHANNEL_ID": "@Iriska_Channel",
+                                      "CHANNEL_URL": "https://t.me/+secret"}):
+        assert load_config().channel_url == "https://t.me/+secret", \
+            "явный CHANNEL_URL важнее ссылки из @username"
+    with mock.patch.dict(os.environ, {**env, "CHANNEL_ID": "https://t.me/+AbCdEf"}):
+        try:
+            load_config()
+        except RuntimeError as e:
+            assert "CHANNEL_ID" in str(e)
+        else:
+            raise AssertionError("инвайт-ссылка в CHANNEL_ID должна давать понятную ошибку")
+
+    # --- Фейковый Telegram ---
+    group, channel, url, bot_id = -1001111111111, "@iriska_channel", "https://t.me/iriska_channel", 999
+
+    def user_obj(uid: int) -> User:
+        return User(id=uid, is_bot=False, first_name=f"Юзер{uid}", username=f"user{uid}")
+
+    def member_obj(kind: str, uid: int):
+        # model_construct: в разных версиях aiogram набор обязательных полей разный
+        u = user_obj(uid)
+        if kind == "member":
+            return ChatMemberMember.model_construct(user=u)
+        if kind == "left":
+            return ChatMemberLeft.model_construct(user=u)
+        if kind == "kicked":
+            return ChatMemberBanned.model_construct(user=u)
+        if kind == "creator":
+            return ChatMemberOwner.model_construct(user=u)
+        if kind == "admin":
+            return ChatMemberAdministrator.model_construct(user=u)
+        if kind == "restricted_in":
+            return ChatMemberRestricted.model_construct(user=u, is_member=True)
+        if kind == "restricted_out":
+            return ChatMemberRestricted.model_construct(user=u, is_member=False)
+        raise ValueError(kind)
+
+    def bad_request(text: str) -> TelegramBadRequest:
+        return TelegramBadRequest(
+            method=GetChatMember(chat_id=channel, user_id=1), message=text
+        )
+
+    class FakeSession(BaseSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sent: list[SendMessage] = []
+            self.member_calls: list[GetChatMember] = []
+            self.scenario: dict = {}      # user_id -> тип участника | исключение
+            self.chat_info: dict | Exception = {}
+            self._mid = 0
+
+        async def close(self) -> None:
+            pass
+
+        async def stream_content(self, *args, **kwargs):
+            yield b""
+
+        async def make_request(self, bot, method, timeout=None):
+            if isinstance(method, GetChatMember):
+                self.member_calls.append(method)
+                what = self.scenario.get(method.user_id, "left")
+                if isinstance(what, Exception):
+                    raise what
+                return member_obj(what, method.user_id)
+            if isinstance(method, SendMessage):
+                self.sent.append(method)
+                self._mid += 1
+                return Message(
+                    message_id=self._mid, date=datetime.datetime.now(),
+                    chat=Chat(id=method.chat_id, type="supergroup"), text=method.text,
+                )
+            if isinstance(method, GetMe):
+                return User(id=bot_id, is_bot=True, first_name="Ириска", username="iriska_bot")
+            if isinstance(method, GetChat):
+                if isinstance(self.chat_info, Exception):
+                    raise self.chat_info
+                return ChatFullInfo.model_construct(
+                    id=-1002222222222, type="channel", **self.chat_info
+                )
+            raise AssertionError(f"неожиданный запрос к Telegram: {method}")
+
+    class LogCatcher(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[tuple[str, str]] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append((record.levelname, record.getMessage()))
+
+    session = FakeSession()
+    bot = Bot("123456:test", session=session,
+              default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher(db=db, config=base_cfg)
+    for router in (admin_router, quiz_router, user_router, games_router, counting_router):
+        dp.include_router(router)  # в том же порядке, что и в bot.py
+
+    cfg_on = replace(base_cfg, channel_id=channel, channel_url=url,
+                     bonus_min=2, bonus_max=2)
+    cfg_off = replace(cfg_on, channel_id=None, channel_url="")
+    counter = 1000
+
+    async def say(uid: int, text: str, cfg=cfg_on) -> list[SendMessage]:
+        """Участник пишет в группу; возвращает ответы бота."""
+        nonlocal counter
+        counter += 1
+        before = len(session.sent)
+        msg = Message(
+            message_id=counter, date=datetime.datetime.now(),
+            chat=Chat(id=group, type="supergroup", title="Чат"),
+            from_user=user_obj(uid), text=text,
+        )
+        await dp.feed_update(bot, Update(update_id=counter, message=msg), config=cfg)
+        return session.sent[before:]
+
+    async def bonus_state(uid: int):
+        row = await db.get_user(group, uid)
+        return (row["balance"], row["last_bonus_day"]) if row else (0, None)
+
+    # --- Не подписан: просьба подписаться со ссылкой, бонус не тратится ---
+    session.scenario[101] = "left"
+    replies = await say(101, "бонус")
+    assert len(replies) == 1
+    reply = replies[0]
+    assert "только подписчикам канала" in reply.text, reply.text
+    assert url in reply.text, "в тексте должна быть ссылка на канал"
+    assert isinstance(reply.reply_markup, InlineKeyboardMarkup)
+    assert reply.reply_markup.inline_keyboard[0][0].url == url, "нет кнопки со ссылкой"
+    assert reply.link_preview_options and reply.link_preview_options.is_disabled
+    assert len(session.member_calls) == 1
+    assert session.member_calls[0].user_id == 101 and session.member_calls[0].chat_id == channel, \
+        "проверка должна идти по ID пользователя в канал из CHANNEL_ID"
+    assert await bonus_state(101) == (0, None), "неподписанному бонус не выдаётся"
+
+    # Подписался -> пишет «бонус» снова в тот же день и получает его
+    session.scenario[101] = "member"
+    replies = await say(101, "бонус")
+    assert "Ежедневный бонус: <b>+2</b>" in replies[0].text, replies[0].text
+    bal, day = await bonus_state(101)
+    assert bal == 2 and day is not None, "после подписки бонус дня не должен был сгореть"
+
+    replies = await say(101, "бонус")
+    assert "уже забирал бонус сегодня" in replies[0].text
+    assert (await bonus_state(101))[0] == 2, "повторный бонус за день"
+
+    # Все статусы участника канала
+    expected = {
+        "member": True, "admin": True, "creator": True, "restricted_in": True,
+        "left": False, "kicked": False, "restricted_out": False,
+    }
+    for i, (kind, allowed) in enumerate(expected.items()):
+        uid = 200 + i
+        session.scenario[uid] = kind
+        replies = await say(uid, "Бонус!")
+        got = "Ежедневный бонус" in replies[0].text
+        assert got == allowed, f"статус {kind}: бонус {'должен' if allowed else 'не должен'} выдаваться"
+        assert (await bonus_state(uid))[0] == (2 if allowed else 0), kind
+        if not allowed:
+            assert "только подписчикам канала" in replies[0].text, kind
+
+    # «user not found» от Telegram — человека нет в канале
+    logging.disable(logging.CRITICAL)  # ожидаемые ошибки не засоряют вывод тестов
+    session.scenario[300] = bad_request("Bad Request: user not found")
+    replies = await say(300, "бонус")
+    assert "только подписчикам канала" in replies[0].text
+    assert await bonus_state(300) == (0, None)
+
+    # Сбой проверки (неверный CHANNEL_ID, сеть, неожиданная ошибка): бонус НЕ
+    # выдаётся, а человеку не врут «ты не подписан»
+    failures = {
+        301: bad_request("Bad Request: chat not found"),
+        302: TelegramNetworkError(
+            method=GetChatMember(chat_id=channel, user_id=1), message="timeout"),
+        303: RuntimeError("неожиданный сбой"),
+    }
+    for uid, exc in failures.items():
+        session.scenario[uid] = exc
+        replies = await say(uid, "бонус")
+        assert "Не получилось проверить подписку" in replies[0].text, type(exc).__name__
+        assert "только подписчикам" not in replies[0].text
+        assert await bonus_state(uid) == (0, None), \
+            f"при сбое проверки ({type(exc).__name__}) бонус выдаваться не должен"
+    logging.disable(logging.NOTSET)
+
+    # Команда и длинная форма триггера защищены так же
+    session.scenario[400] = "left"
+    assert "только подписчикам канала" in (await say(400, "/bonus"))[0].text
+    assert "только подписчикам канала" in (await say(400, "ежедневный бонус"))[0].text
+    assert await bonus_state(400) == (0, None)
+
+    # Много «бонус» подряд от подписчика: выдан ровно один (сеть перед записью
+    # не должна открывать гонку)
+    session.scenario[500] = "member"
+    before = len(session.sent)
+    await asyncio.gather(*(say(500, "бонус") for _ in range(5)))
+    texts_sent = [m.text for m in session.sent[before:]]
+    assert sum("Ежедневный бонус" in t for t in texts_sent) == 1, texts_sent
+    assert sum("уже забирал" in t for t in texts_sent) == 4, texts_sent
+    assert (await bonus_state(500))[0] == 2
+
+    # Справка упоминает подписку (и только когда она включена)
+    games_on = (await say(101, "/games"))[0].text
+    assert "Только для подписчиков" in games_on and url in games_on, games_on
+    assert "ежедневный бонус для подписчиков" in (await say(101, "/help"))[0].text
+
+    # --- Канал не настроен: всё как раньше, Telegram о подписке не спрашиваем ---
+    calls = len(session.member_calls)
+    replies = await say(600, "бонус", cfg=cfg_off)
+    assert "Ежедневный бонус: <b>+2</b>" in replies[0].text
+    assert len(session.member_calls) == calls, "без CHANNEL_ID проверка подписки не нужна"
+    assert "подписчиков" not in (await say(600, "/games", cfg=cfg_off))[0].text
+    help_off = (await say(600, "/help", cfg=cfg_off))[0].text
+    assert "/bonus — ежедневный бонус («бонус»)" in help_off
+
+    # --- Самопроверка при старте ---
+    catcher = LogCatcher()
+    logging.getLogger("subscription").addHandler(catcher)
+    cfg_nourl = replace(cfg_on, channel_url="")
+
+    session.scenario[bot_id] = "admin"
+    session.chat_info = {"title": "Ириска", "username": "iriska_channel"}
+    assert (await setup_channel(bot, cfg_nourl)).channel_url == url, \
+        "ссылка на публичный канал строится по username"
+    keep = replace(cfg_on, channel_url="https://t.me/+secret")
+    assert (await setup_channel(bot, keep)).channel_url == "https://t.me/+secret", \
+        "заданный CHANNEL_URL перезаписываться не должен"
+    session.chat_info = {"title": "Закрытый", "invite_link": "https://t.me/+AbCdEf"}
+    assert (await setup_channel(bot, cfg_nourl)).channel_url == "https://t.me/+AbCdEf"
+
+    catcher.records.clear()
+    session.scenario[bot_id] = "member"
+    await setup_channel(bot, cfg_on)
+    assert any(lvl == "ERROR" and "не администратор" in m for lvl, m in catcher.records), \
+        "если бот не админ канала — об этом должно быть громко сказано в логе"
+
+    catcher.records.clear()
+    session.chat_info = bad_request("Bad Request: chat not found")
+    assert await setup_channel(bot, cfg_on) is cfg_on, "ошибка канала не должна ронять старт"
+    assert any(lvl == "ERROR" and "Не могу получить канал" in m for lvl, m in catcher.records)
+
+    catcher.records.clear()
+    assert await setup_channel(bot, cfg_off) is cfg_off
+    assert any(lvl == "WARNING" and "БЕЗ проверки" in m for lvl, m in catcher.records), \
+        "без CHANNEL_ID бот предупреждает, что бонус открыт всем"
+    logging.getLogger("subscription").removeHandler(catcher)
 
 
 if __name__ == "__main__":

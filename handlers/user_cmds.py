@@ -21,6 +21,7 @@ from handlers.common import (
     week_ago_day,
     windows_text,
 )
+from subscription import subscribers_phrase
 from texts import display_name, fmt, help_text, iriski, msgs, place
 
 router = Router(name="user")
@@ -196,6 +197,7 @@ async def cmd_help(message: Message, config: Config) -> None:
             contact=config.admin_contact,
             hours_line=hours_line,
             dedupe=config.dedupe_repeats,
+            bonus_for=subscribers_phrase(config),
         )
     )
 

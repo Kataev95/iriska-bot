@@ -13,13 +13,14 @@ import secrets
 import time
 from html import escape
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 from config import Config
 from db import Database
 from handlers.common import GroupF, today_day, trig, yesterday_day
+from subscription import ensure_subscribed, subscribers_phrase
 from texts import days, display_name, fmt, iriski
 
 router = Router(name="games")
@@ -69,12 +70,18 @@ def slot_multiplier(value: int) -> tuple[int, str]:
 
 @router.message(GroupF, Command("bonus"))
 @router.message(GroupF, trig(BONUS_TRIGGERS))
-async def cmd_bonus(message: Message, db: Database, config: Config) -> None:
+async def cmd_bonus(
+    message: Message, bot: Bot, db: Database, config: Config
+) -> None:
     user = message.from_user
     if user is None or user.is_bot:
         return
     if not config.bonus_enabled:
         await message.reply("Ежедневные бонусы сейчас выключены.")
+        return
+    # Бонус только для подписчиков канала (если задан CHANNEL_ID). Проверка
+    # идёт ДО claim_bonus: неподписанный не должен потратить свой бонус дня.
+    if not await ensure_subscribed(message, bot, config):
         return
     lo = max(config.bonus_min, 0)
     hi = max(config.bonus_max, lo)
@@ -350,6 +357,7 @@ async def cmd_cancel_duel(message: Message, db: Database, config: Config) -> Non
 @router.message(Command("games"))
 @router.message(GroupF, trig(GAMES_TRIGGERS))
 async def cmd_games(message: Message, config: Config) -> None:
+    subs = subscribers_phrase(config)
     await message.reply(
         "🎮 <b>Игры и бонусы</b>\n\n"
         f"🎁 <b>Бонус</b> — напиши «бонус»: раз в день +{config.bonus_min}–{max(config.bonus_max, config.bonus_min)} 🍬"
@@ -357,6 +365,7 @@ async def cmd_games(message: Message, config: Config) -> None:
             f", за каждый день подряд бонус растёт (до +{config.streak_max_extra})"
             if config.streak_max_extra > 0 else ""
         )
+        + (f"\n🔒 Только {subs}" if subs else "")
         + "\n\n"
         f"🎰 <b>Слоты</b> — «казино 10» (ставка {fmt(config.casino_min_bet)}–{fmt(config.casino_max_bet)} 🍬):\n"
         "7️⃣7️⃣7️⃣ — х10 • три одинаковых — х5 • две семёрки — возврат\n\n"

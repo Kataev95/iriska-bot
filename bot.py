@@ -32,6 +32,7 @@ from handlers import (
 from handlers.common import current_window, is_bonus_hour
 from handlers.quiz import load_active_chats, resume_queues
 from monthly import monthly_stats_announcer
+from subscription import setup_channel
 
 logger = logging.getLogger("iriska-bot")
 
@@ -122,6 +123,9 @@ async def main() -> None:
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    # Бонус только для подписчиков: проверяем настройку канала (бот — админ?)
+    # и, если CHANNEL_URL не задан, определяем ссылку на канал сами.
+    config = await setup_channel(bot, config)
     dp = Dispatcher(db=db, config=config)
     # Порядок важен: сначала команды, подсчёт — последним,
     # чтобы команды и триггеры не попадали в статистику.

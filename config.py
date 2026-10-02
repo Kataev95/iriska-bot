@@ -48,6 +48,66 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+_USERNAME_RE = r"[A-Za-z][A-Za-z0-9_]{3,31}"
+_CHANNEL_LINK_RE = re.compile(
+    rf"^(?:https?://)?(?:www\.)?(?:t|telegram)\.me/({_USERNAME_RE})/?(?:\?.*)?$",
+    re.IGNORECASE,
+)
+
+
+def parse_channel_ref(raw: str) -> int | str | None:
+    """Разбор CHANNEL_ID: числовой ID, @username или ссылка t.me/username.
+
+    - пусто -> None (проверка подписки выключена);
+    - «-1001234567890» -> int; положительное число считаем ID без префикса -100
+      (так выглядит ID в ссылках вида t.me/c/1234567890/5);
+    - «@channel», «channel», «https://t.me/channel» -> «@channel»;
+    - всё остальное (например, инвайт-ссылка t.me/+abc) -> ValueError:
+      по такой ссылке Telegram не даёт проверить участника, нужен ID.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"-?\d+", raw):
+        value = int(raw)
+        return int(f"-100{value}") if value > 0 else value
+    m = _CHANNEL_LINK_RE.match(raw)
+    if m:
+        return "@" + m.group(1)
+    m = re.fullmatch(rf"@?({_USERNAME_RE})", raw)
+    if m:
+        return "@" + m.group(1)
+    raise ValueError(raw)
+
+
+def normalize_channel_url(raw: str) -> str:
+    """Приводит CHANNEL_URL к виду https://t.me/... (пусто -> пустая строка)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if re.match(r"^https?://", raw, re.IGNORECASE):
+        return raw
+    if re.match(r"^(?:www\.)?(?:t|telegram)\.me/", raw, re.IGNORECASE):
+        return "https://" + raw
+    m = re.fullmatch(rf"@?({_USERNAME_RE})", raw)
+    if m:
+        return f"https://t.me/{m.group(1)}"
+    return raw
+
+
+def _channel_env(name: str) -> int | str | None:
+    raw = (os.getenv(name) or "").strip()
+    try:
+        return parse_channel_ref(raw)
+    except ValueError:
+        raise RuntimeError(
+            f"Не удалось разобрать {name}={raw!r}. Укажи числовой ID канала "
+            "(вида -1001234567890) или @username публичного канала. "
+            "Инвайт-ссылка вида t.me/+... не подходит: по ней нельзя проверить "
+            "подписку — её можно положить в CHANNEL_URL, а ID взять через @getidsbot."
+        ) from None
+
+
 def _parse_windows(raw: str) -> tuple[tuple[int, int], ...]:
     """Разбор расписания вида "7-9,13-15,20-21" в окна часов.
 
@@ -95,6 +155,11 @@ class Config:
     bonus_hours_mult: int
     announce_bonus_hours: bool
     tz: ZoneInfo
+    # Канал, подписка на который нужна для бонуса. None — проверка выключена.
+    channel_id: int | str | None = None
+    # Ссылка на канал для подсказки «подпишись». Если не задана: для @username
+    # строится из него, для числового ID бот пробует узнать её при старте.
+    channel_url: str = ""
 
 
 def load_config() -> Config:
@@ -104,6 +169,11 @@ def load_config() -> Config:
             "Не задан BOT_TOKEN. Получи токен у @BotFather и пропиши его "
             "в переменную окружения BOT_TOKEN (или в файл .env)."
         )
+    channel_id = _channel_env("CHANNEL_ID")
+    channel_url = normalize_channel_url(os.getenv("CHANNEL_URL") or "")
+    if not channel_url and isinstance(channel_id, str):
+        # публичный канал: ссылка однозначно строится из @username, без запросов
+        channel_url = f"https://t.me/{channel_id.lstrip('@')}"
     return Config(
         bot_token=token,
         admin_ids=_ids_env("ADMIN_IDS"),
@@ -134,4 +204,6 @@ def load_config() -> Config:
         bonus_hours_mult=_int_env("BONUS_HOURS_MULT", 2),
         announce_bonus_hours=_bool_env("ANNOUNCE_BONUS_HOURS", True),
         tz=ZoneInfo((os.getenv("BOT_TZ") or "Europe/Moscow").strip()),
+        channel_id=channel_id,
+        channel_url=channel_url,
     )
