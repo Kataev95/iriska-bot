@@ -1,4 +1,4 @@
-"""Админ-команды: начисление и списание ирисок, просмотр статистики участника.
+"""Админ-команды: начисление и списание ирисок, статистика, заказы магазина.
 
 Роутер целиком закрыт AdminFilter: для всех остальных эти команды
 просто не существуют. Обычные сообщения админа проходят дальше
@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
@@ -15,7 +16,7 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GroupF, build_profile
+from handlers.common import GroupF, build_profile, mention
 from texts import display_name, fmt, iriski
 
 MAX_AMOUNT = 1_000_000
@@ -171,3 +172,111 @@ async def cmd_who(message: Message, command: CommandObject, db: Database, config
         await message.reply(err)
         return
     await message.reply(await build_profile(db, config, message.chat.id, row))
+
+
+# ---------- заказы магазина ----------
+
+ORDER_STATUS = {
+    "new": "🆕 новый",
+    "done": "✅ выполнен",
+    "refunded": "↩️ возврат",
+}
+
+
+def _order_when(raw: str | None, config: Config) -> str:
+    """«2026-10-02 11:30:00» (UTC из базы) -> «02.10 14:30» по часовому поясу бота."""
+    try:
+        created = datetime.fromisoformat(raw or "")
+    except ValueError:
+        return ""
+    local = created.replace(tzinfo=timezone.utc).astimezone(config.tz)
+    return local.strftime("%d.%m %H:%M")
+
+
+def _order_line(order, config: Config) -> str:
+    who = "—"
+    buyer = order["buyer_name"] or order["buyer_username"]
+    if buyer:
+        who = mention(order["user_id"], order["buyer_name"], order["buyer_username"])
+        if order["buyer_username"]:
+            who += f" (@{order['buyer_username']})"
+    elif order["user_id"]:
+        who = f"id <code>{order['user_id']}</code>"
+    when = _order_when(order["created_at"], config)
+    head = f"<b>№{order['id']}</b> — {order['item_title']} — 🍬 {fmt(order['price'])}"
+    status = "" if order["status"] == "new" else f" — {ORDER_STATUS.get(order['status'], order['status'])}"
+    return f"{head}{status}\n👤 {who}{', ' + when if when else ''}"
+
+
+@router.message(GroupF, Command("orders"))
+async def cmd_orders(message: Message, command: CommandObject, db: Database, config: Config) -> None:
+    """Новые заказы магазина в этом чате: /orders (или /orders all — все)."""
+    show_all = (command.args or "").strip().lower() in {"all", "все", "всё"}
+    orders = await db.list_orders(message.chat.id, "new" if not show_all else "", 20)
+    if not orders:
+        await message.reply(
+            "Заказов нет 🎉" if show_all else "Новых заказов нет 🎉"
+        )
+        return
+    title = "Все заказы чата" if show_all else "Новые заказы"
+    lines = [f"🛍 <b>{title}</b> — {len(orders)}", ""]
+    lines.extend(_order_line(o, config) for o in orders)
+    if not show_all:
+        lines.extend([
+            "",
+            "Закрыть: <code>/order_done 12</code> • "
+            "Вернуть ириски: <code>/order_refund 12</code>",
+        ])
+    await message.reply("\n".join(lines))
+
+
+async def _order_action(
+    message: Message, raw_args: str, db: Database, *, refund: bool,
+) -> None:
+    args = (raw_args or "").split()
+    if not args or not args[0].lstrip("#").isdigit():
+        cmd = "order_refund" if refund else "order_done"
+        await message.reply(
+            f"Укажи номер заказа: <code>/{cmd} 12</code> "
+            "(номер виден в /orders)"
+        )
+        return
+    order_id = int(args[0].lstrip("#"))
+    if refund:
+        status, balance = await db.refund_order(
+            order_id, message.chat.id, message.from_user.id
+        )
+        if status == "ok":
+            await message.reply(
+                f"↩️ Заказ №{order_id} отменён, ириски вернулись покупателю.\n"
+                f"Его баланс: <b>{fmt(balance)}</b> {iriski(balance)}"
+            )
+        else:
+            await message.reply(
+                f"Заказ №{order_id} не найден среди новых — "
+                "проверь номер в /orders"
+            )
+        return
+    done = await db.complete_order(order_id, message.chat.id, message.from_user.id)
+    if done:
+        await message.reply(f"✅ Заказ №{order_id} отмечен выполненным")
+    else:
+        await message.reply(
+            f"Заказ №{order_id} не найден среди новых — проверь номер в /orders"
+        )
+
+
+@router.message(GroupF, Command("order_done"))
+async def cmd_order_done(
+    message: Message, command: CommandObject, db: Database, config: Config,
+) -> None:
+    """Отмечает заказ выполненным: /order_done 12."""
+    await _order_action(message, command.args or "", db, refund=False)
+
+
+@router.message(GroupF, Command("order_refund"))
+async def cmd_order_refund(
+    message: Message, command: CommandObject, db: Database, config: Config,
+) -> None:
+    """Отменяет заказ и возвращает ириски: /order_refund 12."""
+    await _order_action(message, command.args or "", db, refund=True)

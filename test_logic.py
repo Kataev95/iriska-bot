@@ -406,6 +406,7 @@ async def run() -> None:
     await db.close()
 
     await run_subscription()
+    await run_shop()
     print("✅ Все тесты пройдены")
 
 
@@ -440,7 +441,10 @@ async def _check_subscription(db: Database) -> None:
     from aiogram.client.session.base import BaseSession
     from aiogram.enums import ParseMode
     from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-    from aiogram.methods import GetChat, GetChatMember, GetMe, SendMessage
+    from aiogram.methods import (
+        AnswerCallbackQuery, EditMessageText, GetChat, GetChatMember, GetMe,
+        SendMessage,
+    )
     from aiogram.types import (
         Chat, ChatFullInfo, ChatMemberAdministrator, ChatMemberBanned,
         ChatMemberLeft, ChatMemberMember, ChatMemberOwner, ChatMemberRestricted,
@@ -449,7 +453,8 @@ async def _check_subscription(db: Database) -> None:
 
     from config import load_config, normalize_channel_url, parse_channel_ref
     from handlers import (
-        admin_router, counting_router, games_router, quiz_router, user_router,
+        admin_router, counting_router, games_router, quiz_router, shop_router,
+        user_router,
     )
     from subscription import setup_channel
 
@@ -533,6 +538,8 @@ async def _check_subscription(db: Database) -> None:
             super().__init__()
             self.sent: list[SendMessage] = []
             self.member_calls: list[GetChatMember] = []
+            self.edits: list[EditMessageText] = []
+            self.answers: list[AnswerCallbackQuery] = []
             self.scenario: dict = {}      # user_id -> тип участника | исключение
             self.chat_info: dict | Exception = {}
             self._mid = 0
@@ -557,6 +564,16 @@ async def _check_subscription(db: Database) -> None:
                     message_id=self._mid, date=datetime.datetime.now(),
                     chat=Chat(id=method.chat_id, type="supergroup"), text=method.text,
                 )
+            if isinstance(method, EditMessageText):
+                self.edits.append(method)
+                self._mid += 1
+                return Message(
+                    message_id=method.message_id, date=datetime.datetime.now(),
+                    chat=Chat(id=method.chat_id, type="supergroup"), text=method.text,
+                )
+            if isinstance(method, AnswerCallbackQuery):
+                self.answers.append(method)
+                return True
             if isinstance(method, GetMe):
                 return User(id=bot_id, is_bot=True, first_name="Ириска", username="iriska_bot")
             if isinstance(method, GetChat):
@@ -579,7 +596,8 @@ async def _check_subscription(db: Database) -> None:
     bot = Bot("123456:test", session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(db=db, config=base_cfg)
-    for router in (admin_router, quiz_router, user_router, games_router, counting_router):
+    for router in (admin_router, quiz_router, user_router, shop_router,
+                   games_router, counting_router):
         dp.include_router(router)  # в том же порядке, что и в bot.py
 
     cfg_on = replace(base_cfg, channel_id=channel, channel_url=url,
@@ -730,6 +748,303 @@ async def _check_subscription(db: Database) -> None:
     assert any(lvl == "WARNING" and "БЕЗ проверки" in m for lvl, m in catcher.records), \
         "без CHANNEL_ID бот предупреждает, что бонус открыт всем"
     logging.getLogger("subscription").removeHandler(catcher)
+
+    # --- Магазин за ириски: кнопки, заказы, уведомления ---
+    await _check_shop_handlers(
+        db, bot=bot, dp=dp, session=session, group=group, user_obj=user_obj,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Магазин за ириски
+# ---------------------------------------------------------------------------
+
+BUYER = 333
+SHOP_ADMIN = 4242
+
+
+def _check_shop_catalog() -> None:
+    """Каталог: цены из ТЗ, поиск по коду и алиасам, переопределение цен."""
+    from shop import (
+        DEFAULT_ITEMS, apply_overrides, catalog, find_item,
+        parse_price_overrides,
+    )
+
+    items = catalog("")
+    assert {i.code: i.price for i in items} == {
+        "vpn": 300, "brak": 200, "aiphoto": 150, "compliment": 20,
+        "nuds": 10_000, "psycho": 200, "pleasant": 10,
+    }, [i.price for i in items]
+
+    assert find_item(items, "VPN").code == "vpn"
+    assert find_item(items, "  впн  ").code == "vpn"
+    assert find_item(items, "брак").code == "brak"
+    assert find_item(items, "NUDES").code == "nuds"
+    assert find_item(items, "приятное").code == "pleasant"
+    assert find_item(items, "/buy") is None
+    assert find_item(items, "чего-то такого") is None
+    assert find_item(items, None) is None
+
+    assert parse_price_overrides("vpn=350, nuds:12000;мусор;x=") == {
+        "vpn": 350, "nuds": 12000,
+    }
+    assert parse_price_overrides("") == {} and parse_price_overrides(None) == {}
+    assert apply_overrides(DEFAULT_ITEMS, "") == DEFAULT_ITEMS
+
+    over = apply_overrides(DEFAULT_ITEMS, "vpn=350, pleasant=0, compliment=-5")
+    assert {i.code: i.price for i in over} == {
+        "vpn": 350, "brak": 200, "aiphoto": 150, "nuds": 10000, "psycho": 200,
+    }, "лоты с ценой <= 0 должны исчезать из магазина"
+
+
+async def _check_shop_db(db: Database) -> None:
+    """Покупки на уровне базы: списание, заказы, закрытие и возврат."""
+    import sqlite3
+
+    from shop import catalog
+
+    items = {i.code: i for i in catalog("")}
+    compliment = items["compliment"]
+
+    def ledger_rows() -> list[tuple[int, str]]:
+        conn = sqlite3.connect(db.path)
+        try:
+            return conn.execute(
+                "SELECT amount, reason FROM ledger "
+                "WHERE chat_id = ? AND user_id = ? ORDER BY id",
+                (CHAT, BUYER),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    # Незнакомого участника магазин не обслуживает
+    status, balance, order_id = await db.create_order(
+        CHAT, BUYER, "buyer", "Покупатель",
+        compliment.code, compliment.title, compliment.price)
+    assert (status, balance, order_id) == ("not_found", 0, None)
+
+    # Пустой баланс: покупки нет, заказа нет, журнал пуст
+    await db.ensure_user(CHAT, BUYER, "buyer", "Покупатель")
+    status, balance, order_id = await db.create_order(
+        CHAT, BUYER, "buyer", "Покупатель",
+        compliment.code, compliment.title, compliment.price)
+    assert (status, balance, order_id) == ("insufficient", 0, None)
+    assert await db.list_orders(CHAT) == []
+    assert ledger_rows() == []
+
+    await db.adjust_balance(CHAT, BUYER, 100, "тест", None)
+    status, balance, order_id = await db.create_order(
+        CHAT, BUYER, "buyer", "Покупатель",
+        compliment.code, compliment.title, compliment.price)
+    assert (status, balance) == ("ok", 80) and order_id is not None
+    orders = await db.list_orders(CHAT)
+    assert len(orders) == 1
+    assert orders[0]["status"] == "new" and orders[0]["item_code"] == "compliment"
+    assert orders[0]["price"] == 20 and orders[0]["buyer_name"] == "Покупатель"
+    assert orders[0]["buyer_username"] == "buyer"
+    assert ledger_rows()[-1] == (-20, "магазин: Комплимент"), ledger_rows()
+
+    # Закрытие заказа идемпотентно, закрытый не возвращают
+    assert await db.complete_order(order_id, CHAT, SHOP_ADMIN) is True
+    assert await db.complete_order(order_id, CHAT, SHOP_ADMIN) is False
+    assert (await db.list_orders(CHAT)) == []
+    assert [o["id"] for o in await db.list_orders(CHAT, "done")] == [order_id]
+    assert await db.refund_order(order_id, CHAT, SHOP_ADMIN) == ("not_found", 0)
+
+    # Возврат за новый заказ: ириски возвращаются, заказ получает статус refunded
+    status, balance, order2 = await db.create_order(
+        CHAT, BUYER, "buyer", "Покупатель",
+        items["pleasant"].code, items["pleasant"].title, items["pleasant"].price)
+    assert (status, balance) == ("ok", 70)
+    assert await db.refund_order(order2, CHAT, SHOP_ADMIN) == ("ok", 80)
+    assert await db.refund_order(order2, CHAT, SHOP_ADMIN) == ("not_found", 0)
+    row = await db.get_user(CHAT, BUYER)
+    assert row["balance"] == 80 and row["earned_total"] == 100, \
+        "покупки и возвраты не должны менять «всего заработано»"
+    assert ledger_rows()[-1] == (10, f"магазин: возврат за заказ №{order2}")
+    assert [o["id"] for o in await db.list_orders(CHAT, "refunded")] == [order2]
+    all_orders = await db.list_orders(CHAT, "")
+    assert len(all_orders) == 2, "пустой статус = все заказы"
+    assert len(await db.list_orders(CHAT, "", limit=1)) == 1
+
+
+async def run_shop() -> None:
+    """Магазин: каталог и покупки на уровне базы.
+
+    Кнопки, заказы и уведомления проверяются в _check_shop_handlers — там
+    нужен диспетчер с роутерами, который собирает _check_subscription.
+    """
+    _check_shop_catalog()
+    tmp = tempfile.mkdtemp()
+    db = Database(os.path.join(tmp, "shop.db"))
+    await db.connect()
+    try:
+        await _check_shop_db(db)
+    finally:
+        await db.close()
+
+
+async def _check_shop_handlers(
+    db: Database, *, bot, dp, session, group: int, user_obj,
+) -> None:
+    """Кнопки магазина: каталог, подтверждение, списание, заказы, уведомления.
+
+    Работает на диспетчере и фейковой сессии из _check_subscription: у aiogram
+    роутер нельзя подключить к двум диспетчерам, а проверить хочется настоящую
+    связку роутеров, а не вызовы функций напрямую.
+    """
+    import datetime
+    from dataclasses import replace
+    from unittest import mock
+
+    from aiogram.types import CallbackQuery, Chat, Message, Update, User
+
+    from config import load_config
+    from handlers import shop as shop_handlers
+    from shop import catalog, find_item
+
+    # --- Настройки магазина ---
+    env = {"BOT_TOKEN": "123456:test", "ADMIN_IDS": str(SHOP_ADMIN),
+           "SHOP_CONTACT": ""}
+    with mock.patch.dict(os.environ, env):
+        cfg = load_config()
+    assert cfg.shop_enabled is True
+    assert cfg.shop_contact == "@PabloSvytoy", "пустой SHOP_CONTACT -> ADMIN_CONTACT"
+    assert cfg.shop_notify_admins is True
+    with mock.patch.dict(os.environ, {**env, "SHOP_CONTACT": "@Curator"}):
+        assert load_config().shop_contact == "@Curator"
+    with mock.patch.dict(os.environ, {**env, "SHOP_ENABLED": "0"}):
+        assert load_config().shop_enabled is False
+    with mock.patch.dict(os.environ, {**env, "SHOP_PRICES": "aiphoto=160, pleasant=0"}):
+        items = catalog(load_config().shop_prices)
+    assert find_item(items, "aiphoto").price == 160
+    assert find_item(items, "pleasant") is None, "цена 0 должна убирать товар"
+
+    bot_user = User(id=999, is_bot=True, first_name="Ириска", username="iriska_bot")
+    counter = 9000
+
+    async def say(uid: int, text: str, config=cfg):
+        nonlocal counter
+        counter += 1
+        before = len(session.sent)
+        msg = Message(
+            message_id=counter, date=datetime.datetime.now(),
+            chat=Chat(id=group, type="supergroup", title="Чат"),
+            from_user=user_obj(uid), text=text,
+        )
+        await dp.feed_update(
+            bot, Update(update_id=counter, message=msg), config=config
+        )
+        return session.sent[before:]
+
+    async def press(uid: int, data: str, config=cfg):
+        nonlocal counter
+        counter += 1
+        before_edits, before_answers = len(session.edits), len(session.answers)
+        msg = Message(
+            message_id=700, date=datetime.datetime.now(),
+            chat=Chat(id=group, type="supergroup", title="Чат"),
+            from_user=bot_user,
+        )
+        query = CallbackQuery(
+            id=f"cb{counter}", from_user=user_obj(uid), chat_instance="chat-ci",
+            message=msg, data=data,
+        )
+        await dp.feed_update(
+            bot, Update(update_id=counter, callback_query=query), config=config
+        )
+        return session.edits[before_edits:], session.answers[before_answers:]
+
+    # Баланс покупателя: 400 ирисок
+    await db.ensure_user(group, BUYER, "buyer", "Покупатель")
+    await db.adjust_balance(group, BUYER, 400, "тест", None)
+    shop_handlers._last_purchase.clear()
+
+    # Каталог: все семь лотов, кнопка на каждый и подсказка про админа
+    replies = await say(BUYER, "магазин")
+    assert len(replies) == 1 and replies[0].reply_markup is not None, [r.text for r in replies]
+    catalog_reply = replies[0]
+    assert "Магазин ирисок" in catalog_reply.text, catalog_reply.text
+    assert "VPN на месяц" in catalog_reply.text and "10 000" in catalog_reply.text
+    assert "@PabloSvytoy" in catalog_reply.text
+    rows = catalog_reply.reply_markup.inline_keyboard
+    assert len(rows) == 7 and rows[0][0].callback_data == "shop:item:vpn"
+
+    # Нюдсы не по карману: списания нет, кнопки «Купить» нет
+    edits, _ = await press(BUYER, "shop:item:nuds")
+    assert "Не хватает" in edits[-1].text and "9 600" in edits[-1].text
+    assert len(edits[-1].reply_markup.inline_keyboard) == 1, "нет кнопки покупки"
+    assert (await db.get_user(group, BUYER))["balance"] == 400, "списали лишнее"
+
+    # Покупка ИИ-фотосессии: списание, заказ, чек и уведомление админу в личку
+    with mock.patch.object(shop_handlers, "PURCHASE_COOLDOWN", 0.0):
+        edits, _ = await press(BUYER, "shop:item:aiphoto")
+        assert "останется" in edits[-1].text and "250" in edits[-1].text
+        edits, answers = await press(BUYER, "shop:buy:aiphoto")
+        receipt = edits[-1].text
+        assert "Покупка оформлена" in receipt and "150" in receipt
+        assert "Админ свяжется с вами: @PabloSvytoy" in receipt
+        assert "Юзер333" in receipt
+
+        # Повторное «Купить» сразу защищено паузой и не списывает второй раз
+        with mock.patch.object(shop_handlers, "PURCHASE_COOLDOWN", 60.0):
+            _, answers = await press(BUYER, "shop:buy:compliment")
+        assert "Уже оформляю" in (answers[0].text or ""), answers[0].text
+
+    assert (await db.get_user(group, BUYER))["balance"] == 250, "двойное списание"
+    orders = await db.list_orders(group)
+    assert len(orders) == 1 and orders[0]["price"] == 150
+    order_id = orders[0]["id"]
+    dms = [m for m in session.sent if m.chat_id == SHOP_ADMIN]
+    assert len(dms) == 1, "админу должно уйти уведомление о заказе"
+    assert "Новый заказ" in dms[0].text and "ИИ-фотосессия" in dms[0].text
+    assert "Юзер333" in dms[0].text and "user333" in dms[0].text
+
+    # /buy: код, русское название и незнакомый товар
+    replies = await say(BUYER, "/buy vpn")
+    assert "Не хватает" in replies[-1].text and "50" in replies[-1].text
+    replies = await say(BUYER, "/buy впн")
+    assert "Подтверди покупку" in replies[-1].text
+    replies = await say(BUYER, "/buy ерунда")
+    assert "Не знаю такого товара" in replies[-1].text
+
+    # Админ видит новые заказы чата и закрывает их
+    replies = await say(SHOP_ADMIN, "/orders")
+    assert f"№{order_id}" in replies[-1].text and "ИИ-фотосессия" in replies[-1].text
+    assert "/order_done" in replies[-1].text
+    replies = await say(SHOP_ADMIN, f"/order_done {order_id}")
+    assert "отмечен выполненным" in replies[-1].text
+    replies = await say(SHOP_ADMIN, f"/order_done {order_id}")
+    assert "не найден среди новых" in replies[-1].text
+    replies = await say(SHOP_ADMIN, "/orders")
+    assert "Новых заказов нет" in replies[-1].text
+    replies = await say(SHOP_ADMIN, "/orders all")
+    assert f"№{order_id}" in replies[-1].text and "выполнен" in replies[-1].text
+
+    # Возврат за невыполненный заказ: ириски возвращаются покупателю
+    with mock.patch.object(shop_handlers, "PURCHASE_COOLDOWN", 0.0):
+        await press(BUYER, "shop:buy:compliment")
+    assert (await db.get_user(group, BUYER))["balance"] == 230
+    refund_id = (await db.list_orders(group))[0]["id"]
+    replies = await say(SHOP_ADMIN, f"/order_refund {refund_id}")
+    assert "вернулись" in replies[-1].text and "250" in replies[-1].text
+    assert (await db.get_user(group, BUYER))["balance"] == 250
+    replies = await say(SHOP_ADMIN, f"/order_refund {refund_id}")
+    assert "не найден среди новых" in replies[-1].text
+    replies = await say(SHOP_ADMIN, "/order_done")
+    assert "Укажи номер заказа" in replies[-1].text
+
+    # Обычному участнику админские команды магазина недоступны
+    before = len(session.sent)
+    await say(BUYER, "/orders")
+    assert len(session.sent) == before, "обычный участник увидел /orders"
+
+    # Выключенный магазин отвечает отказом, кнопки не работают
+    cfg_off = replace(cfg, shop_enabled=False)
+    replies = await say(BUYER, "магазин", config=cfg_off)
+    assert "закрыт" in replies[-1].text
+    _, answers = await press(BUYER, "shop:item:vpn", config=cfg_off)
+    assert answers and "закрыт" in (answers[-1].text or "")
 
 
 if __name__ == "__main__":

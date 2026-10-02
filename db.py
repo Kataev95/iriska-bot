@@ -74,11 +74,25 @@ CREATE TABLE IF NOT EXISTS bot_meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS orders (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    item_code   TEXT    NOT NULL,
+    item_title  TEXT    NOT NULL,
+    price       INTEGER NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'new',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    resolved_by INTEGER
+);
+
 CREATE INDEX IF NOT EXISTS idx_daily_chat_day ON daily_stats (chat_id, day);
 CREATE INDEX IF NOT EXISTS idx_users_top ON users (chat_id, total_counted DESC);
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (chat_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_duels_pending ON duels (chat_id, status);
 CREATE INDEX IF NOT EXISTS idx_quizzes_active ON quizzes (chat_id, status);
+CREATE INDEX IF NOT EXISTS idx_orders_chat ON orders (chat_id, status, id);
 """
 
 
@@ -436,6 +450,136 @@ class Database:
                 "INSERT INTO ledger (chat_id, user_id, amount, reason, admin_id) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (chat_id, user_id, amount, reason, admin_id),
+            )
+            await db.commit()
+            return "ok", new_balance
+
+    # ---------- магазин ----------
+
+    async def create_order(
+        self, chat_id: int, user_id: int,
+        username: str | None, first_name: str | None,
+        item_code: str, item_title: str, price: int,
+    ) -> tuple[str, int, int | None]:
+        """Покупка в магазине: списывает ириски и создаёт заказ.
+
+        Возвращает (статус, баланс, id заказа):
+        - ("ok", новый баланс, id) — покупка прошла;
+        - ("insufficient", текущий баланс, None) — ирисок не хватает;
+        - ("not_found", 0, None) — участника нет в статистике чата.
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT balance FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return "not_found", 0, None
+            balance = int(row["balance"])
+            if price > balance:
+                return "insufficient", balance, None
+
+            new_balance = balance - price
+            await db.execute(
+                "UPDATE users SET balance = ?, username = COALESCE(?, username), "
+                "first_name = COALESCE(?, first_name) "
+                "WHERE chat_id = ? AND user_id = ?",
+                (new_balance, username, first_name, chat_id, user_id),
+            )
+            if price > 0:
+                await db.execute(
+                    "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                    "VALUES (?, ?, ?, ?)",
+                    (chat_id, user_id, -price, f"магазин: {item_title}"),
+                )
+            cur = await db.execute(
+                "INSERT INTO orders (chat_id, user_id, item_code, item_title, price) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (chat_id, user_id, item_code, item_title, price),
+            )
+            order_id = int(cur.lastrowid)
+            await db.commit()
+            return "ok", new_balance, order_id
+
+    async def list_orders(
+        self, chat_id: int, status: str = "new", limit: int = 20,
+    ) -> list[aiosqlite.Row]:
+        """Заказы чата (свежие первыми) вместе с именем покупателя.
+
+        Пустой status — заказы в любом статусе.
+        """
+        sql = (
+            "SELECT o.*, u.first_name AS buyer_name, u.username AS buyer_username "
+            "FROM orders o "
+            "LEFT JOIN users u ON u.chat_id = o.chat_id AND u.user_id = o.user_id "
+            "WHERE o.chat_id = ?"
+        )
+        params: list = [chat_id]
+        if status:
+            sql += " AND o.status = ?"
+            params.append(status)
+        sql += " ORDER BY o.id LIMIT ?"
+        params.append(limit)
+        cur = await self._require().execute(sql, params)
+        return list(await cur.fetchall())
+
+    async def complete_order(
+        self, order_id: int, chat_id: int, admin_id: int | None,
+    ) -> bool:
+        """Закрывает заказ: статус 'new' -> 'done'. False, если не нашёл."""
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "UPDATE orders SET status = 'done', resolved_at = datetime('now'), "
+                "resolved_by = ? WHERE id = ? AND chat_id = ? AND status = 'new'",
+                (admin_id, order_id, chat_id),
+            )
+            changed = cur.rowcount
+            await db.commit()
+            return bool(changed)
+
+    async def refund_order(
+        self, order_id: int, chat_id: int, admin_id: int | None,
+    ) -> tuple[str, int]:
+        """Возвращает ириски за невыполненный заказ (статус 'refunded').
+
+        Возвращает (статус, баланс покупателя):
+        - ("ok", новый баланс);
+        - ("not_found", 0) — заказа нет, он в другом чате или уже закрыт.
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT user_id, item_title, price FROM orders "
+                "WHERE id = ? AND chat_id = ? AND status = 'new'",
+                (order_id, chat_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return "not_found", 0
+
+            await db.execute(
+                "UPDATE users SET balance = balance + ? "
+                "WHERE chat_id = ? AND user_id = ?",
+                (row["price"], chat_id, row["user_id"]),
+            )
+            cur = await db.execute(
+                "SELECT balance FROM users WHERE chat_id = ? AND user_id = ?",
+                (chat_id, row["user_id"]),
+            )
+            new_balance = int((await cur.fetchone())["balance"])
+            await db.execute(
+                "INSERT INTO ledger (chat_id, user_id, amount, reason, admin_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (chat_id, row["user_id"], row["price"],
+                 f"магазин: возврат за заказ №{order_id}", admin_id),
+            )
+            await db.execute(
+                "UPDATE orders SET status = 'refunded', "
+                "resolved_at = datetime('now'), resolved_by = ? WHERE id = ?",
+                (admin_id, order_id),
             )
             await db.commit()
             return "ok", new_balance

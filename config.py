@@ -160,6 +160,14 @@ class Config:
     # Ссылка на канал для подсказки «подпишись». Если не задана: для @username
     # строится из него, для числового ID бот пробует узнать её при старте.
     channel_url: str = ""
+    # Магазин за ириски.
+    shop_enabled: bool = True
+    # Кому писать после покупки. Пусто — берётся ADMIN_CONTACT.
+    shop_contact: str = ""
+    # Переопределение цен: «vpn=350,nuds=12000» (цена <= 0 убирает товар).
+    shop_prices: str = ""
+    # Присылать ли админам заказы в личку (нужен ADMIN_IDS).
+    shop_notify_admins: bool = True
 
 
 def load_config() -> Config:
@@ -169,6 +177,7 @@ def load_config() -> Config:
             "Не задан BOT_TOKEN. Получи токен у @BotFather и пропиши его "
             "в переменную окружения BOT_TOKEN (или в файл .env)."
         )
+    admin_contact = (os.getenv("ADMIN_CONTACT") or "@PabloSvytoy").strip()
     channel_id = _channel_env("CHANNEL_ID")
     channel_url = normalize_channel_url(os.getenv("CHANNEL_URL") or "")
     if not channel_url and isinstance(channel_id, str):
@@ -178,7 +187,7 @@ def load_config() -> Config:
         bot_token=token,
         admin_ids=_ids_env("ADMIN_IDS"),
         admin_usernames=_names_env("ADMIN_USERNAMES", "PabloSvytoy"),
-        admin_contact=(os.getenv("ADMIN_CONTACT") or "@PabloSvytoy").strip(),
+        admin_contact=admin_contact,
         db_path=(os.getenv("DB_PATH") or "data/iriski.db").strip(),
         min_msg_len=_int_env("MIN_MSG_LEN", 1),
         cooldown_seconds=_float_env("COOLDOWN_SECONDS", 0.0),
@@ -206,4 +215,8 @@ def load_config() -> Config:
         tz=ZoneInfo((os.getenv("BOT_TZ") or "Europe/Moscow").strip()),
         channel_id=channel_id,
         channel_url=channel_url,
+        shop_enabled=_bool_env("SHOP_ENABLED", True),
+        shop_contact=(os.getenv("SHOP_CONTACT") or admin_contact).strip(),
+        shop_prices=(os.getenv("SHOP_PRICES") or "").strip(),
+        shop_notify_admins=_bool_env("SHOP_NOTIFY_ADMINS", True),
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from html import escape
 
 from aiogram import F
 from aiogram.enums import ChatType
@@ -23,6 +24,14 @@ def norm(t: str | None) -> str:
 def trig(words: set[str]):
     """Фильтр: текст сообщения (без учёта регистра/пунктуации) — одно из слов."""
     return F.text.func(lambda t: norm(t) in words)
+
+
+def mention(user_id: int, first_name: str | None, username: str | None) -> str:
+    """HTML-упоминание участника: кликабельное имя по Telegram ID."""
+    name = (first_name or "").strip() or (("@" + username) if username else "боец")
+    if len(name) > 25:
+        name = name[:24] + "…"
+    return f'<a href="tg://user?id={user_id}">{escape(name)}</a>'
 
 
 def is_bonus_hour(hour: int, windows: tuple[tuple[int, int], ...]) -> bool:
