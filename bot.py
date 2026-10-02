@@ -110,6 +110,18 @@ async def set_commands(bot: Bot, config: Config) -> None:
             logger.warning("Не смог задать меню для админа %s: %s", admin_id, e)
 
 
+def allowed_updates(dp: Dispatcher) -> list[str]:
+    """Типы апдейтов, которые бот запрашивает у Telegram.
+
+    Telegram отдаёт только перечисленные типы, поэтому забытый в списке тип —
+    это молча неработающая фича. Так вышло с кнопками магазина: жёсткий
+    список ["message"] не пускал callback_query, и нажатия не доходили до
+    бота, хотя хендлеры были на месте. Чтобы это не повторилось, спрашиваем
+    типы у роутеров — новая фича с новым типом апдейта подключится сама.
+    """
+    return dp.resolve_used_update_types()
+
+
 async def main() -> None:
     load_dotenv()
     logging.basicConfig(
@@ -154,7 +166,9 @@ async def main() -> None:
                 "Надёжнее прописать ID: напиши боту /id в личку.",
                 ", ".join(sorted(config.admin_usernames)),
             )
-        await dp.start_polling(bot, allowed_updates=["message"])
+        updates = allowed_updates(dp)
+        logger.info("Слушаю апдейты: %s", ", ".join(updates))
+        await dp.start_polling(bot, allowed_updates=updates)
     finally:
         announcer.cancel()
         monthly_announcer.cancel()
