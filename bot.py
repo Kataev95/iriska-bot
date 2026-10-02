@@ -27,6 +27,7 @@ from handlers import (
     counting_router,
     games_router,
     quiz_router,
+    shop_router,
     user_router,
 )
 from handlers.common import current_window, is_bonus_hour
@@ -82,6 +83,7 @@ async def set_commands(bot: Bot, config: Config) -> None:
         BotCommand(command="day", description="Топ за сегодня"),
         BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
         BotCommand(command="games", description="Правила игр"),
+        BotCommand(command="shop", description="Магазин за ириски 🛍"),
         BotCommand(command="hours", description="Бонусные часы ⏰"),
         BotCommand(command="withdraw", description="Вывести ириски"),
         BotCommand(command="help", description="Как это работает"),
@@ -132,6 +134,7 @@ async def main() -> None:
     dp.include_router(admin_router)
     dp.include_router(quiz_router)
     dp.include_router(user_router)
+    dp.include_router(shop_router)
     dp.include_router(games_router)
     dp.include_router(counting_router)
 

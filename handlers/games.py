@@ -11,7 +11,6 @@ import asyncio
 import re
 import secrets
 import time
-from html import escape
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
@@ -19,7 +18,7 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GroupF, today_day, trig, yesterday_day
+from handlers.common import GroupF, mention, today_day, trig, yesterday_day
 from subscription import ensure_subscribed, subscribers_phrase
 from texts import days, display_name, fmt, iriski
 
@@ -37,13 +36,6 @@ CASINO_HINT_TRIGGERS = {"казино", "слоты"}
 
 # кулдаун казино держим в памяти: после рестарта просто обнулится
 _last_casino: dict[tuple[int, int], float] = {}
-
-
-def mention(user_id: int, first_name: str | None, username: str | None) -> str:
-    name = (first_name or "").strip() or (("@" + username) if username else "боец")
-    if len(name) > 25:
-        name = name[:24] + "…"
-    return f'<a href="tg://user?id={user_id}">{escape(name)}</a>'
 
 
 # ---------- слоты: разбор значения барабанов ----------

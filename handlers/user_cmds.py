@@ -59,17 +59,18 @@ async def cmd_balance(message: Message, db: Database, config: Config) -> None:
         return
     row = await db.get_user(message.chat.id, user.id)
     balance = row["balance"] if row else 0
+    shop_line = "\n🛍 Потратить: /shop" if config.shop_enabled else ""
     if balance >= config.withdraw_threshold:
         await message.reply(
             f"🍬 Баланс: <b>{fmt(balance)}</b> {iriski(balance)} — ✅ можно выводить!\n"
-            f"Пиши {config.admin_contact}"
+            f"Пиши {config.admin_contact}{shop_line}"
         )
     else:
         need = config.withdraw_threshold - balance
         await message.reply(
             f"🍬 Баланс: <b>{fmt(balance)}</b> {iriski(balance)}\n"
             f"До вывода ({fmt(config.withdraw_threshold)}) осталось "
-            f"{fmt(need)} {iriski(need)}. Подробнее: /me"
+            f"{fmt(need)} {iriski(need)}. Подробнее: /me{shop_line}"
         )
 
 
@@ -198,6 +199,7 @@ async def cmd_help(message: Message, config: Config) -> None:
             hours_line=hours_line,
             dedupe=config.dedupe_repeats,
             bonus_for=subscribers_phrase(config),
+            shop=config.shop_enabled,
         )
     )
 
