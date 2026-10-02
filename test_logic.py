@@ -443,7 +443,7 @@ async def _check_subscription(db: Database) -> None:
     from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
     from aiogram.methods import (
         AnswerCallbackQuery, EditMessageText, GetChat, GetChatMember, GetMe,
-        SendMessage,
+        GetUpdates, SendMessage,
     )
     from aiogram.types import (
         Chat, ChatFullInfo, ChatMemberAdministrator, ChatMemberBanned,
@@ -542,6 +542,8 @@ async def _check_subscription(db: Database) -> None:
             self.answers: list[AnswerCallbackQuery] = []
             self.scenario: dict = {}      # user_id -> тип участника | исключение
             self.chat_info: dict | Exception = {}
+            self.poll_calls: list[GetUpdates] = []   # запросы getUpdates
+            self.poll_updates: list[Update] = []     # «очередь апдейтов» Telegram
             self._mid = 0
 
         async def close(self) -> None:
@@ -551,6 +553,15 @@ async def _check_subscription(db: Database) -> None:
             yield b""
 
         async def make_request(self, bot, method, timeout=None):
+            if isinstance(method, GetUpdates):
+                self.poll_calls.append(method)
+                # Telegram отдаёт только разрешённые в allowed_updates типы
+                allowed = method.allowed_updates
+                for i, update in enumerate(self.poll_updates):
+                    if allowed is None or update.event_type in allowed:
+                        return [self.poll_updates.pop(i)]
+                await asyncio.sleep(3600)  # пустой долгий поллинг — ждём запроса
+                return []
             if isinstance(method, GetChatMember):
                 self.member_calls.append(method)
                 what = self.scenario.get(method.user_id, "left")
@@ -753,6 +764,72 @@ async def _check_subscription(db: Database) -> None:
     await _check_shop_handlers(
         db, bot=bot, dp=dp, session=session, group=group, user_obj=user_obj,
     )
+
+    # --- Нажатия кнопок магазина должны доходить и через long polling ---
+    await _check_polling_buttons(
+        bot=bot, dp=dp, session=session, group=group, user_obj=user_obj,
+        config=cfg_on,
+    )
+
+
+async def _check_polling_buttons(
+    *, bot, dp, session, group: int, user_obj, config,
+) -> None:
+    """Кнопки магазина должны доходить до бота через long polling.
+
+    Продовый путь — не feed_update, а getUpdates: Telegram отдаёт только те
+    типы апдейтов, что перечислены в allowed_updates. Жёсткий ["message"]
+    оставлял callback_query за бортом — кнопки магазина молча не работали,
+    хотя тесты через feed_update их видели. Здесь long polling запускается
+    по-настоящему, а фейковая сессия отдаёт апдейты по правилам Telegram.
+    """
+    from aiogram.types import CallbackQuery, Chat, Message, Update, User
+
+    import bot as bot_module
+
+    updates = bot_module.allowed_updates(dp)
+    assert "message" in updates, updates
+    assert "callback_query" in updates, (
+        f"callback_query пропал из allowed_updates {updates} — нажатия кнопок "
+        "магазина не будут доходить до бота"
+    )
+
+    bot_user = User(id=999, is_bot=True, first_name="Ириска", username="iriska_bot")
+    msg = Message(
+        message_id=701, date=datetime.now(),
+        chat=Chat(id=group, type="supergroup", title="Чат"),
+        from_user=bot_user,
+    )
+    query = CallbackQuery(
+        id="cb-poll", from_user=user_obj(BUYER), chat_instance="chat-ci",
+        message=msg, data="shop:menu",
+    )
+    session.poll_updates.append(Update(update_id=555_001, callback_query=query))
+
+    before = len(session.edits)
+    poll_task = asyncio.create_task(dp.start_polling(
+        bot, allowed_updates=updates, polling_timeout=1,
+        handle_signals=False, close_bot_session=False, config=config,
+    ))
+    try:
+        for _ in range(300):  # до ~3 секунд — с запасом на медленную машину
+            if len(session.edits) > before:
+                break
+            if poll_task.done():
+                poll_task.result()  # поллинг упал на старте — покажем причину
+            await asyncio.sleep(0.01)
+        assert len(session.edits) > before, (
+            "нажатие кнопки магазина не дошло до бота через long polling — "
+            "проверь allowed_updates в bot.py"
+        )
+        assert "Магазин ирисок" in session.edits[-1].text, session.edits[-1].text
+        assert session.poll_calls, "бот ни разу не запросил апдейты"
+        allowed = session.poll_calls[0].allowed_updates or []
+        assert "callback_query" in allowed, allowed
+    finally:
+        if not poll_task.done():
+            await dp.stop_polling()
+        await asyncio.gather(poll_task, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
