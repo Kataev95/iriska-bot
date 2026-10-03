@@ -120,13 +120,13 @@ async def run() -> None:
     assert totals["earned"] == 300  # 2 за активность + 298 бонусом
 
     # --- Ежедневный бонус со стриком ---
-    status, bal, amt, streak = await db.claim_bonus(
+    status, bal, amt, streak, blocked = await db.claim_bonus(
         CHAT, USER1, "tester", "Тестер", "2026-08-01", "2026-07-31", 2, 3)
-    assert status == "ok" and bal == 2 and amt == 2 and streak == 1
-    status, bal2, amt, streak = await db.claim_bonus(
+    assert status == "ok" and bal == 2 and amt == 2 and streak == 1 and blocked == 0
+    status, bal2, amt, streak, _ = await db.claim_bonus(
         CHAT, USER1, "tester", "Тестер", "2026-08-01", "2026-07-31", 2, 3)
     assert status == "already" and bal2 == 2 and streak == 1, "бонус выдался дважды за день"
-    status, bal3, amt, streak = await db.claim_bonus(
+    status, bal3, amt, streak, _ = await db.claim_bonus(
         CHAT, USER1, "tester", "Тестер", "2026-08-02", "2026-08-01", 1, 3)
     assert status == "ok" and streak == 2 and amt == 2, "стрик не вырос"  # 1 базовый +1 стрик
     assert bal3 == 4
@@ -243,13 +243,13 @@ async def run() -> None:
     ]
     bal_run = 0
     for day, yest, want_amt, want_streak in expected:
-        status, bal_run, amt, streak = await db.claim_bonus(
+        status, bal_run, amt, streak, _ = await db.claim_bonus(
             CHAT, USER5, "st", "Стрикер", day, yest, 2, 3)
         assert status == "ok" and amt == want_amt and streak == want_streak, (day, amt, streak)
     assert bal_run == 2 + 3 + 4 + 5 + 5
 
     # Пропустил день — серия сгорела
-    status, bal_run, amt, streak = await db.claim_bonus(
+    status, bal_run, amt, streak, _ = await db.claim_bonus(
         CHAT, USER5, "st", "Стрикер", "2026-08-20", "2026-08-19", 2, 3)
     assert status == "ok" and amt == 2 and streak == 1, "стрик не сбросился после пропуска"
 
@@ -348,6 +348,10 @@ async def run() -> None:
     await month_db.adjust_balance(CHAT, USER2, 7, "тест", None)
     duel_id = await month_db.create_duel(CHAT, USER1, USER2, 5, 8_000_200)
     assert duel_id > 0
+    status, _, _, _, _ = await month_db.claim_bonus(
+        CHAT, USER1, "first", "Первый", "2026-08-31", "2026-08-30", 2, 0,
+        now_ts=8_000_250)
+    assert status == "ok"
     assert await month_db.ensure_stats_period("2026-08") == "2026-08"
 
     snapshots = await month_db.close_stats_period(
@@ -366,6 +370,8 @@ async def run() -> None:
         assert row["total_counted"] == 0 and row["balance"] == 0
         assert row["earned_total"] == 0 and row["progress"] == 0
         assert row["last_bonus_day"] is None and row["bonus_streak"] == 0
+        assert row["bonus_claimed_ts"] == 0 and row["bonus_claimed_amount"] == 0, \
+            "месячный сброс должен снимать бонус с наблюдения"
     assert await month_db.user_count_since(CHAT, USER1, "2000-01-01") == 0
     assert not await month_db.has_pending_duel(CHAT, USER1)
     assert await month_db.close_stats_period(
@@ -396,17 +402,21 @@ async def run() -> None:
 
     old_db = Database(old_path)
     await old_db.connect()  # должна пройти миграция
-    status, bal, amt, streak = await old_db.claim_bonus(
+    status, bal, amt, streak, _ = await old_db.claim_bonus(
         CHAT, 777, "old", "Старый", "2026-08-01", "2026-07-31", 2, 3)
     assert status == "ok" and bal == 44 and streak == 1, "миграция/бонус на старой базе не сработали"
     row = await old_db.get_user(CHAT, 777)
     assert row["balance"] == 44 and row["bonus_streak"] == 1
+    # Колонки сторожа подписки тоже должны появиться в старой базе
+    assert row["bonus_claimed_amount"] == 2 and row["bonus_claimed_ts"] > 0
+    assert row["bonus_violations"] == 0 and row["bonus_blocked_until"] == 0
     await old_db.close()
 
     await db.close()
 
     await run_subscription()
     await run_shop()
+    await run_bonus_watch()
     print("✅ Все тесты пройдены")
 
 
@@ -771,6 +781,11 @@ async def _check_subscription(db: Database) -> None:
         config=cfg_on,
     )
 
+    # --- Сторож подписки: блокировка за отписки видна в ответах бота ---
+    await _check_bonus_watch_handlers(
+        db, bot=bot, session=session, group=group, say=say, config=cfg_on,
+    )
+
 
 async def _check_polling_buttons(
     *, bot, dp, session, group: int, user_obj, config,
@@ -830,6 +845,89 @@ async def _check_polling_buttons(
         if not poll_task.done():
             await dp.stop_polling()
         await asyncio.gather(poll_task, return_exceptions=True)
+
+
+async def _check_bonus_watch_handlers(
+    db: Database, *, bot, session, group: int, say, config,
+) -> None:
+    """Реакция бота на отписки: отзыв, блокировка, ответы «бонус» и /me.
+
+    Работает на диспетчере и фейковой сессии из _check_subscription: у aiogram
+    роутер нельзя подключить к двум диспетчерам, поэтому проверяем настоящую
+    связку роутеров, а не вызовы хендлеров напрямую.
+    """
+    import sqlite3
+    import time
+    from dataclasses import replace
+
+    from bot import process_bonus_watch
+    from handlers.common import bonus_block_line
+
+    def reset_watches() -> None:
+        """Снимает наблюдение, оставшееся от других проверок."""
+        conn = sqlite3.connect(db.path)
+        try:
+            conn.execute(
+                "UPDATE users SET bonus_claimed_ts = 0, bonus_claimed_amount = 0"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    async def claim(day: str, yesterday: str, when: float) -> str:
+        status, _, _, _, _ = await db.claim_bonus(
+            group, abuser, "abuser", "Нарушитель", day, yesterday, 2, 0,
+            now_ts=when, abuse_limit=config.bonus_abuse_limit,
+            block_seconds=config.bonus_block_seconds)
+        return status
+
+    assert config.channel_id is not None and config.bonus_watch_seconds > 0
+    assert config.bonus_abuse_limit > 0
+
+    abuser = 9901
+    now = time.time()
+    session.scenario[abuser] = "left"
+    reset_watches()
+
+    # День 1: забрал бонус, отписался — бонус отозван, но блокировки ещё нет
+    assert await claim("2026-09-01", "2026-08-31", now) == "ok"
+    assert await process_bonus_watch(bot, db, config, now_ts=now + 60) == 1
+    row = await db.get_user(group, abuser)
+    assert row["balance"] == 0 and row["bonus_violations"] == 1
+    assert row["bonus_blocked_until"] == 0
+    notices = [m.text for m in session.sent
+               if f"tg://user?id={abuser}" in (m.text or "")]
+    assert len(notices) == 1 and "Бонус сгорел" in notices[0], notices
+
+    # День 2: снова забрал и снова отписался — лимит исчерпан, бонус закрыт
+    assert await claim("2026-09-02", "2026-09-01", now + 86400) == "ok"
+    assert await process_bonus_watch(bot, db, config, now_ts=now + 86400 + 60) == 1
+    row = await db.get_user(group, abuser)
+    block_line = bonus_block_line(row["bonus_blocked_until"], config)  # «до ДД.ММ.ГГГГ»
+    assert row["bonus_blocked_until"] > now + 86400 + 60
+    notices = [m.text for m in session.sent
+               if f"tg://user?id={abuser}" in (m.text or "")]
+    assert len(notices) == 2 and block_line in notices[-1], notices
+
+    # На «бонус» — дата разблокировки (и это важнее просьбы подписаться)
+    replies = await say(abuser, "бонус", cfg=config)
+    assert block_line in replies[-1].text, replies[-1].text
+
+    # В /me — та же строка
+    replies = await say(abuser, "/me", cfg=config)
+    assert block_line in replies[-1].text, replies[-1].text
+
+    # /games и /help рассказывают про наблюдение; с выключенным сторожем — нет
+    games = (await say(abuser, "/games", cfg=config))[-1].text
+    assert "Бонус под наблюдением" in games and "24" in games, games
+    help_on = (await say(abuser, "/help", cfg=config))[-1].text
+    assert "слежу за подпиской" in help_on, help_on
+
+    cfg_nowatch = replace(config, bonus_watch_hours=0.0)
+    games_off = (await say(abuser, "/games", cfg=cfg_nowatch))[-1].text
+    assert "Бонус под наблюдением" not in games_off, games_off
+    help_off = (await say(abuser, "/help", cfg=cfg_nowatch))[-1].text
+    assert "слежу за подпиской" not in help_off, help_off
 
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1220,307 @@ async def _check_shop_handlers(
     assert "закрыт" in replies[-1].text
     _, answers = await press(BUYER, "shop:item:vpn", config=cfg_off)
     assert answers and "закрыт" in (answers[-1].text or "")
+
+
+# ---------------------------------------------------------------------------
+# Сторож подписки: «забрал бонус и отписался»
+# ---------------------------------------------------------------------------
+
+class FakeWatchBot:
+    """Мини-замена aiogram.Bot: только get_chat_member и send_message.
+
+    check_subscription работает через эти два метода, поэтому для проверки
+    сторожа настоящий Telegram и сеть не нужны.
+    """
+
+    def __init__(self) -> None:
+        self.statuses: dict[int, str] = {}       # user_id -> статус в канале
+        self.error: Exception | None = None      # сбой проверки у всех
+        self.calls: list[tuple[object, int]] = []
+        self.sent: list[tuple[int, str]] = []
+
+    async def get_chat_member(self, chat_id, user_id):
+        from types import SimpleNamespace
+
+        self.calls.append((chat_id, user_id))
+        if self.error is not None:
+            raise self.error
+        status = self.statuses.get(user_id, "left")
+        return SimpleNamespace(status=status, is_member=status == "restricted_in")
+
+    async def send_message(self, chat_id, text):
+        self.sent.append((chat_id, text))
+
+
+async def run_bonus_watch() -> None:
+    """Сторож подписки: окно наблюдения, отзыв, нарушения, выключатели."""
+    import logging
+    import sqlite3
+    import time
+    from dataclasses import replace
+    from unittest import mock
+
+    from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+    from aiogram.methods import GetChatMember
+
+    from bot import bonus_watchdog, process_bonus_watch
+    from config import load_config
+
+    # --- Настройки: значения по умолчанию и разбор переменных окружения ---
+    env = {
+        "BOT_TOKEN": "123456:test", "CHANNEL_ID": "@chan", "CHANNEL_URL": "",
+        "BONUS_WATCH_HOURS": "", "BONUS_WATCH_INTERVAL": "",
+        "BONUS_ABUSE_LIMIT": "", "BONUS_ABUSE_BLOCK_DAYS": "",
+        "BONUS_REVOKE_NOTICE": "",
+    }
+    with mock.patch.dict(os.environ, env):
+        base = load_config()
+    assert base.bonus_watch_hours == 24 and base.bonus_watch_seconds == 24 * 3600
+    assert base.bonus_watch_interval == 300
+    assert base.bonus_abuse_limit == 2
+    assert base.bonus_abuse_block_days == 7
+    assert base.bonus_block_seconds == 7 * 86400
+    assert base.bonus_revoke_notice is True
+    with mock.patch.dict(os.environ, {**env, "BONUS_WATCH_HOURS": "0"}):
+        assert load_config().bonus_watch_seconds == 0, "0 должен выключать сторожа"
+    with mock.patch.dict(os.environ, {**env, "BONUS_WATCH_HOURS": "1.5",
+                                      "BONUS_WATCH_INTERVAL": "10",
+                                      "BONUS_ABUSE_LIMIT": "0",
+                                      "BONUS_ABUSE_BLOCK_DAYS": "0",
+                                      "BONUS_REVOKE_NOTICE": "0"}):
+        tuned = load_config()
+    assert tuned.bonus_watch_seconds == 5400 and tuned.bonus_watch_interval == 10
+    assert tuned.bonus_abuse_limit == 0 and tuned.bonus_block_seconds == 0
+    assert tuned.bonus_revoke_notice is False
+
+    tmp = tempfile.mkdtemp()
+    db = Database(os.path.join(tmp, "watch.db"))
+    await db.connect()
+    try:
+        bot = FakeWatchBot()
+        cfg = replace(
+            base, channel_id="@chan", channel_url="https://t.me/chan",
+            bonus_min=2, bonus_max=2,
+        )
+        watch = cfg.bonus_watch_seconds
+        day1, day0 = "2026-09-01", "2026-08-31"
+        now = time.time()
+        abuse = dict(abuse_limit=cfg.bonus_abuse_limit,
+                     block_seconds=cfg.bonus_block_seconds)
+
+        def ledger(uid: int) -> list[tuple[int, str]]:
+            conn = sqlite3.connect(db.path)
+            try:
+                return conn.execute(
+                    "SELECT amount, reason FROM ledger WHERE chat_id = ? "
+                    "AND user_id = ? ORDER BY id", (CHAT, uid),
+                ).fetchall()
+            finally:
+                conn.close()
+
+        async def claim(uid: int, day: str, yesterday: str, when: float,
+                        extra: dict | None = None) -> str:
+            status, _, _, _, _ = await db.claim_bonus(
+                CHAT, uid, "watcher", "Сторож", day, yesterday, 2, 0,
+                now_ts=when, **(extra if extra is not None else abuse))
+            return status
+
+        async def drop_watches() -> None:
+            """Снимает все наблюдения: сценарии не должны влиять друг на друга."""
+            await db.finish_expired_bonus_watch(9e12, 1.0)
+
+        # --- Забрал бонус и отписался: отзыв, списание, стрик, журнал, чат ---
+        abuser = 9101
+        assert await claim(abuser, day1, day0, now) == "ok"
+        row = await db.get_user(CHAT, abuser)
+        assert row["balance"] == 2 and row["bonus_streak"] == 1
+        assert row["bonus_claimed_ts"] == now and row["bonus_claimed_amount"] == 2, \
+            "выданный бонус должен вставать под наблюдение"
+        watches = await db.active_bonus_watches(now + 60, watch)
+        assert [int(r["user_id"]) for r in watches] == [abuser]
+
+        # Пока подписан — ничего не отзываем, но подписку проверяем
+        bot.statuses[abuser] = "member"
+        assert await process_bonus_watch(bot, db, cfg, now_ts=now + 60) == 0
+        assert bot.calls[-1] == ("@chan", abuser)
+
+        # Отписался — бонус сгорает
+        bot.statuses[abuser] = "left"
+        assert await process_bonus_watch(bot, db, cfg, now_ts=now + 120) == 1
+        row = await db.get_user(CHAT, abuser)
+        assert row["balance"] == 0, "начисленное должно списаться"
+        assert row["bonus_streak"] == 0, "стрик должен сброситься"
+        assert row["bonus_claimed_ts"] == 0 and row["bonus_claimed_amount"] == 0
+        assert row["bonus_violations"] == 1 and row["bonus_blocked_until"] == 0
+        assert ledger(abuser) == [
+            (2, "ежедневный бонус"),
+            (-2, "бонус отозван: отписка от канала"),
+        ], ledger(abuser)
+        assert bot.sent and bot.sent[-1][0] == CHAT
+        assert "Бонус сгорел" in bot.sent[-1][1], bot.sent[-1][1]
+
+        # Отобранный бонус нельзя забрать повторно в тот же день
+        assert await claim(abuser, day1, day0, now + 180) == "already"
+        assert (await db.get_user(CHAT, abuser))["balance"] == 0
+
+        # Сплит в минус не уходит: ириски уже потрачены (например, в казино)
+        spender = 9102
+        assert await claim(spender, day1, day0, now) == "ok"
+        await db.adjust_balance(CHAT, spender, -2, "тест: потратил бонус", None)
+        bot.statuses[spender] = "left"
+        assert await process_bonus_watch(bot, db, cfg, now_ts=now + 120) == 1
+        row = await db.get_user(CHAT, spender)
+        assert row["balance"] == 0, "баланс не должен уходить в минус"
+        assert ledger(spender) == [
+            (2, "ежедневный бонус"),
+            (-2, "тест: потратил бонус"),
+            (0, "бонус отозван: отписка от канала"),
+        ], ledger(spender)
+        await drop_watches()
+
+        # --- Второе нарушение — блокировка на BONUS_ABUSE_BLOCK_DAYS ---
+        day2 = "2026-09-02"
+        assert await claim(abuser, day2, day1, now + 86400) == "ok"
+        assert (await db.get_user(CHAT, abuser))["bonus_streak"] == 1, \
+            "после отзыва стрик начинается заново"
+        bot.statuses[abuser] = "left"
+        assert await process_bonus_watch(bot, db, cfg, now_ts=now + 86400 + 60) == 1
+        row = await db.get_user(CHAT, abuser)
+        assert row["balance"] == 0
+        assert row["bonus_violations"] == 0, "при блокировке счётчик нарушений обнуляется"
+        expected_until = now + 86400 + 60 + cfg.bonus_block_seconds
+        assert abs(row["bonus_blocked_until"] - expected_until) < 1, \
+            "блокировка должна закрывать бонус на BONUS_ABUSE_BLOCK_DAYS"
+        notices = [t for c, t in bot.sent
+                   if c == CHAT and f"tg://user?id={abuser}" in t]
+        assert len(notices) == 2
+        assert "🚫 Бонус закрыт до" not in notices[0], "первое нарушение — без блокировки"
+        assert "🚫 Бонус закрыт до" in notices[-1], notices[-1]
+
+        # статус blocked: дата разблокировки возвращается вызывающему
+        status, bal, amt, streak, until = await db.claim_bonus(
+            CHAT, abuser, "watcher", "Сторож", "2026-09-03", day2, 2, 0,
+            now_ts=now + 86400 + 120, **abuse)
+        assert status == "blocked" and amt == 0 and bal == 0
+        assert until == row["bonus_blocked_until"]
+        assert await db.bonus_block_until(
+            CHAT, abuser, now + 86400 + 120) == row["bonus_blocked_until"]
+
+        # Блокировка истекла — бонус снова доступен
+        later = row["bonus_blocked_until"] + 1
+        assert await claim(abuser, "2026-09-10", "2026-09-09", later) == "ok"
+        assert (await db.get_user(CHAT, abuser))["balance"] == 2
+        await drop_watches()
+
+        # --- Сбой проверки — не нарушение: ничего не отзываем ---
+        failures = {
+            9200: TelegramNetworkError(
+                method=GetChatMember(chat_id="@chan", user_id=1), message="timeout"),
+            9201: TelegramBadRequest(
+                method=GetChatMember(chat_id="@chan", user_id=1),
+                message="Bad Request: chat not found"),  # бот не админ канала
+        }
+        logging.disable(logging.CRITICAL)  # ожидаемые ошибки не засоряют вывод
+        try:
+            for uid, exc in failures.items():
+                assert await claim(uid, day1, day0, now) == "ok"
+                bot.statuses[uid] = "left"
+                bot.error = exc
+                sent_before, calls_before = len(bot.sent), len(bot.calls)
+                try:
+                    assert await process_bonus_watch(
+                        bot, db, cfg, now_ts=now + 300) == 0, type(exc).__name__
+                finally:
+                    bot.error = None
+                assert len(bot.calls) > calls_before, "проверка всё же состоялась"
+                assert len(bot.sent) == sent_before
+                row = await db.get_user(CHAT, uid)
+                assert row["balance"] == 2 and row["bonus_claimed_amount"] == 2, \
+                    f"сбой ({type(exc).__name__}) не должен отзывать бонус"
+                assert row["bonus_violations"] == 0 and row["bonus_blocked_until"] == 0
+                await drop_watches()
+        finally:
+            logging.disable(logging.NOTSET)
+
+        # --- Окно наблюдения: после BONUS_WATCH_HOURS отписка ничего не решает ---
+        late = 9300
+        assert await claim(late, day1, day0, now) == "ok"
+        bot.statuses[late] = "left"
+        calls_before, sent_before = len(bot.calls), len(bot.sent)
+        assert await process_bonus_watch(bot, db, cfg, now_ts=now + watch + 1) == 0
+        assert len(bot.calls) == calls_before, \
+            "после окна наблюдения подписку проверять не нужно"
+        assert len(bot.sent) == sent_before
+        row = await db.get_user(CHAT, late)
+        assert row["balance"] == 2, "бонус остаётся у человека"
+        assert row["bonus_claimed_amount"] == 0, "истёкшее окно закрывается"
+
+        # --- BONUS_REVOKE_NOTICE=0: отзыв без сообщения в чат ---
+        quiet = 9400
+        assert await claim(quiet, day1, day0, now) == "ok"
+        bot.statuses[quiet] = "left"
+        sent_before = len(bot.sent)
+        assert await process_bonus_watch(
+            bot, db, replace(cfg, bonus_revoke_notice=False), now_ts=now + 60) == 1
+        assert len(bot.sent) == sent_before, "сообщение выключено"
+        assert (await db.get_user(CHAT, quiet))["balance"] == 0, "но отзыв произошёл"
+        await drop_watches()
+
+        # --- BONUS_WATCH_HOURS=0: сторожа нет вовсе ---
+        cfg_nowatch = replace(cfg, bonus_watch_hours=0.0)
+        off_uid = 9500
+        assert await claim(off_uid, day1, day0, now, extra=dict(
+            abuse_limit=0, block_seconds=0)) == "ok"
+        bot.statuses[off_uid] = "left"
+        calls_before, sent_before = len(bot.calls), len(bot.sent)
+        assert await process_bonus_watch(bot, db, cfg_nowatch, now_ts=now + 60) == 0
+        assert len(bot.calls) == calls_before and len(bot.sent) == sent_before
+        assert (await db.get_user(CHAT, off_uid))["balance"] == 2
+        await drop_watches()
+
+        # --- BONUS_ABUSE_LIMIT=0: нарушения не копятся, блокировки нет ---
+        cfg_nolimit = replace(cfg, bonus_abuse_limit=0)
+        free_uid = 9600
+        bot.statuses[free_uid] = "left"
+        for i, (day, yest) in enumerate(
+            ((day1, day0), ("2026-09-02", day1))
+        ):
+            assert await claim(free_uid, day, yest, now + i * 86400, extra=dict(
+                abuse_limit=0, block_seconds=0)) == "ok"
+            assert await process_bonus_watch(
+                bot, db, cfg_nolimit, now_ts=now + i * 86400 + 60) == 1
+        row = await db.get_user(CHAT, free_uid)
+        assert row["bonus_violations"] == 0, "при лимите 0 нарушения не считаются"
+        assert row["bonus_blocked_until"] == 0
+        assert await claim(free_uid, "2026-09-03", "2026-09-02",
+                           now + 2 * 86400, extra=dict(
+                               abuse_limit=0, block_seconds=0)) == "ok", \
+            "без лимита бонус не закрывается"
+
+        # --- Фоновая задача: выключенная настройка завершает её сразу ---
+        await drop_watches()
+        calls_before = len(bot.calls)
+        logging.disable(logging.CRITICAL)  # предупреждение о выключенном стороже
+        try:
+            await asyncio.wait_for(bonus_watchdog(bot, db, cfg_nowatch), timeout=1)
+        finally:
+            logging.disable(logging.NOTSET)
+        assert len(bot.calls) == calls_before, "без сторожа Telegram не дёргаем"
+        try:
+            await asyncio.wait_for(
+                bonus_watchdog(
+                    bot, db,
+                    replace(cfg, bonus_watch_interval=0.01,
+                            bonus_revoke_notice=False),
+                ),
+                timeout=0.2,
+            )
+        except asyncio.TimeoutError:
+            pass  # так и должно быть: сторож работает, пока его не остановят
+        else:
+            raise AssertionError("включённый сторож не должен завершаться сам")
+    finally:
+        await db.close()
 
 
 if __name__ == "__main__":
