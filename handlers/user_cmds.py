@@ -189,6 +189,18 @@ async def cmd_help(message: Message, config: Config) -> None:
             f"х{max(config.bonus_hours_mult, 1)} в "
             f"{windows_text(config.bonus_hours)}"
         )
+    bonus_watch = ""
+    if config.channel_id is not None and config.bonus_watch_seconds > 0:
+        bonus_watch = (
+            f"👀 После бонуса {config.bonus_watch_hours:g} ч слежу за подпиской: "
+            "отпишешься — бонус сгорит"
+        )
+        if config.bonus_abuse_limit > 0:
+            bonus_watch += (
+                f" (с {config.bonus_abuse_limit} нарушений пауза "
+                f"{config.bonus_abuse_block_days:g} дн.)"
+            )
+        bonus_watch += "\n"
     await message.reply(
         help_text(
             per=config.messages_per_iriska,
@@ -200,6 +212,7 @@ async def cmd_help(message: Message, config: Config) -> None:
             dedupe=config.dedupe_repeats,
             bonus_for=subscribers_phrase(config),
             shop=config.shop_enabled,
+            bonus_watch=bonus_watch,
         )
     )
 

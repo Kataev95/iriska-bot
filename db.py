@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Optional
 
 import aiosqlite
@@ -125,6 +126,27 @@ class Database:
         if "bonus_streak" not in cols:
             await db.execute(
                 "ALTER TABLE users ADD COLUMN bonus_streak INTEGER NOT NULL DEFAULT 0"
+            )
+        # Сторож подписки: когда и сколько выдали, сколько было отписок,
+        # до какого момента бонус закрыт за нарушения.
+        if "bonus_claimed_ts" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN bonus_claimed_ts REAL NOT NULL DEFAULT 0"
+            )
+        if "bonus_claimed_amount" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN bonus_claimed_amount "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        if "bonus_violations" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN bonus_violations "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        if "bonus_blocked_until" not in cols:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN bonus_blocked_until "
+                "REAL NOT NULL DEFAULT 0"
             )
         cur = await db.execute("PRAGMA table_info(quizzes)")
         qcols = {row["name"] for row in await cur.fetchall()}
@@ -401,7 +423,8 @@ class Database:
             await db.execute(
                 "UPDATE users SET total_counted = 0, balance = 0, earned_total = 0, "
                 "progress = 0, last_counted_ts = 0, last_msg_hash = NULL, "
-                "last_bonus_day = NULL, bonus_streak = 0"
+                "last_bonus_day = NULL, bonus_streak = 0, "
+                "bonus_claimed_ts = 0, bonus_claimed_amount = 0"
             )
             await db.execute("DELETE FROM daily_stats")
             await db.execute(
@@ -590,17 +613,29 @@ class Database:
         self, chat_id: int, user_id: int,
         username: str | None, first_name: str | None,
         day: str, yesterday: str, base_amount: int, extra_cap: int,
-    ) -> tuple[str, int, int, int]:
+        now_ts: float | None = None, abuse_limit: int = 0, block_seconds: float = 0.0,
+    ) -> tuple[str, int, int, int, float]:
         """Выдаёт бонус раз в день с учётом серии (стрика).
 
         Если вчера бонус тоже забирали — серия растёт и добавляет к бонусу
         (+1 за каждый день серии сверх первого, но не больше extra_cap).
         Пропуск дня сбрасывает серию.
 
-        Возвращает (статус, баланс, начислено, серия):
-        - ("ok", новый баланс, сумма бонуса, длина серии)
-        - ("already", баланс, 0, текущая серия)
+        Выданный бонус ставится под наблюдение сторожа подписки: момент выдачи
+        и сумма пишутся в bonus_claimed_ts / bonus_claimed_amount. Если бонус
+        был отозван за отписку, last_bonus_day остаётся занятым — повторно за
+        этот день бонус не выдаётся.
+
+        abuse_limit > 0 — включена блокировка за отписки: пока
+        bonus_blocked_until в будущем, бонус закрыт (статус "blocked").
+        abuse_limit = 0 отключает блокировку.
+
+        Возвращает (статус, баланс, начислено, серия, закрыт до):
+        - ("ok", новый баланс, сумма бонуса, длина серии, 0)
+        - ("already", баланс, 0, текущая серия, 0)
+        - ("blocked", баланс, 0, текущая серия, момент разблокировки)
         """
+        now = time.time() if now_ts is None else float(now_ts)
         db = self._require()
         async with self._lock:
             await db.execute(
@@ -614,14 +649,24 @@ class Database:
                 (chat_id, user_id, username, first_name),
             )
             cur = await db.execute(
-                "SELECT balance, last_bonus_day, bonus_streak FROM users "
-                "WHERE chat_id = ? AND user_id = ?",
+                "SELECT balance, last_bonus_day, bonus_streak, bonus_blocked_until "
+                "FROM users WHERE chat_id = ? AND user_id = ?",
                 (chat_id, user_id),
             )
             row = await cur.fetchone()
+            blocked_until = float(row["bonus_blocked_until"] or 0.0)
+            if abuse_limit > 0 and blocked_until > now:
+                await db.commit()
+                return (
+                    "blocked", int(row["balance"]), 0,
+                    int(row["bonus_streak"] or 0), blocked_until,
+                )
             if row["last_bonus_day"] == day:
                 await db.commit()
-                return "already", int(row["balance"]), 0, int(row["bonus_streak"] or 0)
+                return (
+                    "already", int(row["balance"]), 0,
+                    int(row["bonus_streak"] or 0), 0.0,
+                )
             if row["last_bonus_day"] == yesterday:
                 streak = int(row["bonus_streak"] or 0) + 1
             else:
@@ -631,9 +676,10 @@ class Database:
             new_balance = row["balance"] + amount
             await db.execute(
                 "UPDATE users SET balance = ?, earned_total = earned_total + ?, "
-                "last_bonus_day = ?, bonus_streak = ? "
+                "last_bonus_day = ?, bonus_streak = ?, bonus_claimed_ts = ?, "
+                "bonus_claimed_amount = ?, bonus_blocked_until = 0 "
                 "WHERE chat_id = ? AND user_id = ?",
-                (new_balance, amount, day, streak, chat_id, user_id),
+                (new_balance, amount, day, streak, now, amount, chat_id, user_id),
             )
             await db.execute(
                 "INSERT INTO ledger (chat_id, user_id, amount, reason) "
@@ -641,7 +687,120 @@ class Database:
                 (chat_id, user_id, amount),
             )
             await db.commit()
-            return "ok", new_balance, amount, streak
+            return "ok", new_balance, amount, streak, 0.0
+
+    # ---------- сторож подписки ----------
+
+    async def bonus_block_until(
+        self, chat_id: int, user_id: int, now_ts: float,
+    ) -> float:
+        """До какого момента бонус закрыт за отписки (0 — не закрыт)."""
+        row = await self.get_user(chat_id, user_id)
+        if row is None:
+            return 0.0
+        until = float(row["bonus_blocked_until"] or 0.0)
+        return until if until > now_ts else 0.0
+
+    async def active_bonus_watches(
+        self, now_ts: float, watch_seconds: float,
+    ) -> list[aiosqlite.Row]:
+        """Кого должен проверить сторож: бонус выдан и окно наблюдения идёт.
+
+        Окно — watch_seconds от момента выдачи (bonus_claimed_ts). После его
+        окончания бонус остаётся у человека, слежение снимается
+        (finish_expired_bonus_watch).
+        """
+        if watch_seconds <= 0:
+            return []
+        cur = await self._require().execute(
+            "SELECT chat_id, user_id, username, first_name, bonus_claimed_ts, "
+            "bonus_claimed_amount, bonus_violations, bonus_blocked_until "
+            "FROM users WHERE bonus_claimed_amount > 0 AND bonus_claimed_ts > 0 "
+            "AND bonus_claimed_ts > ? ORDER BY bonus_claimed_ts, user_id",
+            (now_ts - watch_seconds,),
+        )
+        return list(await cur.fetchall())
+
+    async def finish_expired_bonus_watch(
+        self, now_ts: float, watch_seconds: float,
+    ) -> int:
+        """Снимает наблюдение с тех, у кого окно уже истекло.
+
+        Возвращает, сколько записей закрыто. Отдельного «штрафа» нет: человек
+        сохраняет бонус, а подписку бот проверит при следующей выдаче.
+        """
+        if watch_seconds <= 0:
+            return 0
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "UPDATE users SET bonus_claimed_ts = 0, bonus_claimed_amount = 0 "
+                "WHERE bonus_claimed_amount > 0 AND bonus_claimed_ts > 0 "
+                "AND bonus_claimed_ts <= ?",
+                (now_ts - watch_seconds,),
+            )
+            await db.commit()
+            return int(cur.rowcount)
+
+    async def revoke_bonus(
+        self, chat_id: int, user_id: int, *,
+        now_ts: float, abuse_limit: int, block_seconds: float,
+    ) -> tuple[str, int, int, float]:
+        """Отзывает бонус за отписку от канала.
+
+        Списывается начисленное, но не больше текущего баланса — в минус
+        баланс не уходит. Стрик сбрасывается. Нарушения копятся; при
+        достижении abuse_limit бонус закрывается до now_ts + block_seconds,
+        а счётчик нарушений обнуляется (после паузы квота начинается заново).
+        abuse_limit = 0 отключает и счётчик, и блокировку.
+
+        Возвращает (статус, списано, новый баланс, закрыт до):
+        - ("revoked", списано, баланс, момент разблокировки или 0)
+        - ("noop", 0, баланс, 0) — отзывать нечего
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT balance, bonus_claimed_amount, bonus_violations, "
+                "bonus_blocked_until FROM users "
+                "WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return "noop", 0, 0, 0.0
+            balance = int(row["balance"])
+            claimed = int(row["bonus_claimed_amount"] or 0)
+            if claimed <= 0:
+                return "noop", 0, balance, 0.0
+
+            revoked = min(claimed, max(balance, 0))
+            new_balance = balance - revoked
+            violations = int(row["bonus_violations"] or 0)
+            blocked_until = float(row["bonus_blocked_until"] or 0.0)
+            if abuse_limit > 0:
+                violations += 1
+                if violations >= abuse_limit:
+                    blocked_until = now_ts + max(block_seconds, 0.0)
+                    violations = 0
+            if blocked_until <= now_ts:  # старую/нулевую блокировку не храним
+                blocked_until = 0.0
+            await db.execute(
+                "UPDATE users SET balance = ?, bonus_streak = 0, "
+                "bonus_claimed_ts = 0, bonus_claimed_amount = 0, "
+                "bonus_violations = ?, bonus_blocked_until = ? "
+                "WHERE chat_id = ? AND user_id = ?",
+                (new_balance, violations, blocked_until, chat_id, user_id),
+            )
+            # Запись в журнал — всегда, даже если списывать было нечего:
+            # по ней видно, почему бонус сгорел.
+            await db.execute(
+                "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                "VALUES (?, ?, ?, 'бонус отозван: отписка от канала')",
+                (chat_id, user_id, -revoked),
+            )
+            await db.commit()
+            return "revoked", revoked, new_balance, blocked_until
 
     # ---------- викторины ----------
 

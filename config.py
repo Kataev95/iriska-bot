@@ -168,6 +168,27 @@ class Config:
     shop_prices: str = ""
     # Присылать ли админам заказы в личку (нужен ADMIN_IDS).
     shop_notify_admins: bool = True
+    # --- Сторож подписки: отписка после выдачи бонуса ---
+    # Сколько часов после выдачи бонуса сторож проверяет подписку (0 — сторож выключен).
+    bonus_watch_hours: float = 24.0
+    # Пауза между проверками сторожа, секунд (минимум 1).
+    bonus_watch_interval: float = 300.0
+    # Сколько отписок после бонуса терпеть; при достижении — блокировка (0 — выключить).
+    bonus_abuse_limit: int = 2
+    # На сколько дней закрывать бонус за исчерпанный лимит нарушений.
+    bonus_abuse_block_days: float = 7.0
+    # Писать ли в чат «бонус сгорел» при отзыве за отписку.
+    bonus_revoke_notice: bool = True
+
+    @property
+    def bonus_watch_seconds(self) -> float:
+        """Окно наблюдения в секундах (0 — сторож выключен)."""
+        return max(self.bonus_watch_hours, 0.0) * 3600.0
+
+    @property
+    def bonus_block_seconds(self) -> float:
+        """Блокировка за нарушения в секундах."""
+        return max(self.bonus_abuse_block_days, 0.0) * 86400.0
 
 
 def load_config() -> Config:
@@ -219,4 +240,9 @@ def load_config() -> Config:
         shop_contact=(os.getenv("SHOP_CONTACT") or admin_contact).strip(),
         shop_prices=(os.getenv("SHOP_PRICES") or "").strip(),
         shop_notify_admins=_bool_env("SHOP_NOTIFY_ADMINS", True),
+        bonus_watch_hours=_float_env("BONUS_WATCH_HOURS", 24.0),
+        bonus_watch_interval=_float_env("BONUS_WATCH_INTERVAL", 300.0),
+        bonus_abuse_limit=_int_env("BONUS_ABUSE_LIMIT", 2),
+        bonus_abuse_block_days=_float_env("BONUS_ABUSE_BLOCK_DAYS", 7.0),
+        bonus_revoke_notice=_bool_env("BONUS_REVOKE_NOTICE", True),
     )

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher
@@ -30,10 +31,20 @@ from handlers import (
     shop_router,
     user_router,
 )
-from handlers.common import current_window, is_bonus_hour
+from handlers.common import (
+    bonus_block_line,
+    current_window,
+    is_bonus_hour,
+    mention,
+)
 from handlers.quiz import load_active_chats, resume_queues
 from monthly import monthly_stats_announcer
-from subscription import setup_channel
+from subscription import (
+    NOT_SUBSCRIBED,
+    check_subscription,
+    setup_channel,
+)
+from texts import fmt, iriski
 
 logger = logging.getLogger("iriska-bot")
 
@@ -71,6 +82,115 @@ async def bonus_hours_announcer(bot: Bot, db: Database, config: Config) -> None:
             raise
         except Exception:
             logger.exception("Ошибка анонсера бонусных часов")
+
+
+def bonus_revoked_text(
+    user_id: int, first_name: str | None, username: str | None,
+    revoked: int, balance: int, blocked_until: float, config: Config,
+) -> str:
+    """Сообщение в чат, когда бонус отозвали за отписку от канала."""
+    who = mention(user_id, first_name, username)
+    lines = [
+        "🍬 <b>Бонус сгорел…</b>",
+        f"{who} отписался от канала, а бонус выдаётся только подписчикам — "
+        "отзываю его.",
+    ]
+    if revoked:
+        lines.append(
+            f"Списано: <b>{fmt(revoked)}</b> {iriski(revoked)}, "
+            f"на балансе: <b>{fmt(balance)}</b>."
+        )
+    else:
+        lines.append(
+            f"Ирисок на балансе не было — списывать нечего "
+            f"(баланс: <b>{fmt(balance)}</b>)."
+        )
+    lines.append("Стрик обнулён — серия бонусов начнётся заново.")
+    if blocked_until > 0:
+        lines.append(
+            f"{bonus_block_line(blocked_until, config)} — лимит отписок исчерпан."
+        )
+    return "\n".join(lines)
+
+
+async def process_bonus_watch(
+    bot: Bot, db: Database, config: Config, *, now_ts: float | None = None,
+) -> int:
+    """Один проход сторожа подписки. Возвращает, сколько бонусов отозвано.
+
+    Наблюдение идёт BONUS_WATCH_HOURS после выдачи бонуса: если человек к этому
+    моменту отписался — бонус отзывается. Сбой проверки (сеть, лимиты, бот не
+    админ канала) нарушением не считается: ничего не отзываем, попробуем
+    в следующий проход. Выключено, если нет CHANNEL_ID или BONUS_WATCH_HOURS=0.
+    """
+    watch = config.bonus_watch_seconds
+    if config.channel_id is None or watch <= 0:
+        return 0
+    now = time.time() if now_ts is None else now_ts
+    # Сначала закрываем окна, которые уже истекли: у этих людей бонус остаётся.
+    await db.finish_expired_bonus_watch(now, watch)
+
+    revoked = 0
+    for row in await db.active_bonus_watches(now, watch):
+        user_id, chat_id = int(row["user_id"]), int(row["chat_id"])
+        result = await check_subscription(bot, config.channel_id, user_id)
+        if result != NOT_SUBSCRIBED:
+            continue  # подписан или проверка не удалась
+        status, gone, balance, blocked_until = await db.revoke_bonus(
+            chat_id, user_id, now_ts=now,
+            abuse_limit=config.bonus_abuse_limit,
+            block_seconds=config.bonus_block_seconds,
+        )
+        if status != "revoked":
+            continue
+        revoked += 1
+        logger.info(
+            "Бонус отозван за отписку: user=%s chat=%s списано=%s%s",
+            user_id, chat_id, gone,
+            f", закрыт до {blocked_until:.0f}" if blocked_until else "",
+        )
+        if not config.bonus_revoke_notice:
+            continue
+        try:
+            await bot.send_message(
+                chat_id,
+                bonus_revoked_text(
+                    user_id, row["first_name"], row["username"],
+                    gone, balance, blocked_until, config,
+                ),
+            )
+        except Exception as e:  # выгнали из чата и т.п. — не падаем
+            logger.warning("Не смог сообщить об отзыве бонуса в чат %s: %s", chat_id, e)
+    return revoked
+
+
+async def bonus_watchdog(bot: Bot, db: Database, config: Config) -> None:
+    """Сторож подписки: после бонуса следит, что человек не отписался.
+
+    Первый проход — сразу при старте (перезапуск бота не должен откладывать
+    разбор отписок), дальше — раз в BONUS_WATCH_INTERVAL секунд.
+    """
+    if config.channel_id is None:
+        return
+    if config.bonus_watch_seconds <= 0:
+        logger.warning(
+            "BONUS_WATCH_HOURS=0 — сторож подписки выключен: отписавшиеся "
+            "после бонуса наказания не получат."
+        )
+        return
+    interval = max(config.bonus_watch_interval, 1.0)
+    logger.info(
+        "Сторож подписки запущен: окно %g ч, проверка раз в %g сек",
+        config.bonus_watch_hours, interval,
+    )
+    while True:
+        try:
+            await process_bonus_watch(bot, db, config)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Ошибка сторожа подписки")
+        await asyncio.sleep(interval)
 
 
 async def set_commands(bot: Bot, config: Config) -> None:
@@ -154,6 +274,7 @@ async def main() -> None:
     monthly_announcer = asyncio.create_task(
         monthly_stats_announcer(bot, db, config)
     )
+    watchdog = asyncio.create_task(bonus_watchdog(bot, db, config))
     try:
         await set_commands(bot, config)
         await load_active_chats(db)   # викторины, пережившие рестарт
@@ -172,8 +293,9 @@ async def main() -> None:
     finally:
         announcer.cancel()
         monthly_announcer.cancel()
+        watchdog.cancel()
         await asyncio.gather(
-            announcer, monthly_announcer, return_exceptions=True
+            announcer, monthly_announcer, watchdog, return_exceptions=True
         )
         await db.close()
 

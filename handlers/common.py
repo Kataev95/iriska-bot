@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta
 from html import escape
 
@@ -74,6 +75,16 @@ def week_ago_day(config: Config) -> str:
     return (datetime.now(config.tz) - timedelta(days=6)).strftime("%Y-%m-%d")
 
 
+def fmt_day_ts(ts: float, config: Config) -> str:
+    """Момент времени в часовом поясе бота как дата дд.мм.гггг."""
+    return datetime.fromtimestamp(ts, config.tz).strftime("%d.%m.%Y")
+
+
+def bonus_block_line(ts: float, config: Config) -> str:
+    """Строка «🚫 Бонус закрыт до …» — для /me, ответов и уведомлений."""
+    return f"🚫 Бонус закрыт до {fmt_day_ts(ts, config)}"
+
+
 def current_streak(row, config: Config) -> int:
     """Живая серия бонусов: считается, пока последний бонус был сегодня или вчера."""
     if row["last_bonus_day"] in (today_day(config), yesterday_day(config)):
@@ -103,6 +114,10 @@ async def build_profile(db: Database, config: Config, chat_id: int, row) -> str:
     streak = current_streak(row, config)
     if streak:
         lines.append(f"🔥 Стрик бонуса: <b>{streak}</b> {days(streak)}")
+    if config.bonus_abuse_limit > 0:
+        blocked_until = float(row["bonus_blocked_until"] or 0.0)
+        if blocked_until > time.time():
+            lines.append(bonus_block_line(blocked_until, config))
     if balance >= config.withdraw_threshold:
         lines.append(f"✅ <b>Можно выводить!</b> Пиши {config.admin_contact}")
     else:

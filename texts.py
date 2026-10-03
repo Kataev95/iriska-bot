@@ -54,7 +54,7 @@ def place(i: int) -> str:
 def help_text(
     per: int, threshold: int, min_len: int, cooldown: float,
     contact: str, hours_line: str = "", dedupe: bool = True,
-    bonus_for: str = "", shop: bool = False,
+    bonus_for: str = "", shop: bool = False, bonus_watch: str = "",
 ) -> str:
     rules = [
         "• считаются текстовые сообщения"
@@ -85,7 +85,8 @@ def help_text(
         "/me — моя статистика (или напиши «стата»)\n"
         "/balance — баланс ирисок («баланс»)\n"
         f"/bonus — ежедневный бонус{' ' + bonus_for if bonus_for else ''} («бонус»)\n"
-        "/top — топ чата за текущий месяц («топ»)\n"
+        + bonus_watch
+        + "/top — топ чата за текущий месяц («топ»)\n"
         "/week — топ за 7 дней («топ недели»)\n"
         "/day — топ за сегодня («топ дня»)\n"
         "/casino 10 — слоты («казино 10»)\n"

@@ -18,7 +18,14 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GroupF, mention, today_day, trig, yesterday_day
+from handlers.common import (
+    GroupF,
+    bonus_block_line,
+    mention,
+    today_day,
+    trig,
+    yesterday_day,
+)
 from subscription import ensure_subscribed, subscribers_phrase
 from texts import days, display_name, fmt, iriski
 
@@ -60,6 +67,18 @@ def slot_multiplier(value: int) -> tuple[int, str]:
 
 # ---------- ежедневный бонус ----------
 
+def bonus_blocked_text(user, until: float, config: Config) -> str:
+    """Ответ на «бонус», когда доступ закрыт за отписки после бонуса."""
+    block = max(config.bonus_abuse_block_days, 0.0)
+    return (
+        f"{bonus_block_line(until, config)}\n\n"
+        f"{mention(user.id, user.first_name, user.username)}, бонус выдаётся "
+        "только подписчикам канала, а ты отписывался, пока бонус был под "
+        f"наблюдением. Пауза {block:g} {days(int(round(block)))} — вернись "
+        "позже, бонус снова будет доступен 🍬"
+    )
+
+
 @router.message(GroupF, Command("bonus"))
 @router.message(GroupF, trig(BONUS_TRIGGERS))
 async def cmd_bonus(
@@ -71,6 +90,14 @@ async def cmd_bonus(
     if not config.bonus_enabled:
         await message.reply("Ежедневные бонусы сейчас выключены.")
         return
+    now_ts = time.time()
+    # Блокировка за отписки проверяется до похода в Telegram: человек должен
+    # видеть дату разблокировки, даже если сейчас он на канал не подписан.
+    if config.bonus_abuse_limit > 0:
+        until = await db.bonus_block_until(message.chat.id, user.id, now_ts)
+        if until > 0:
+            await message.reply(bonus_blocked_text(user, until, config))
+            return
     # Бонус только для подписчиков канала (если задан CHANNEL_ID). Проверка
     # идёт ДО claim_bonus: неподписанный не должен потратить свой бонус дня.
     if not await ensure_subscribed(message, bot, config):
@@ -79,10 +106,15 @@ async def cmd_bonus(
     hi = max(config.bonus_max, lo)
     base = lo + (secrets.randbelow(hi - lo + 1) if hi > lo else 0)
     cap = max(config.streak_max_extra, 0)
-    status, balance, amount, streak = await db.claim_bonus(
+    status, balance, amount, streak, blocked_until = await db.claim_bonus(
         message.chat.id, user.id, user.username, user.first_name,
         today_day(config), yesterday_day(config), base, cap,
+        now_ts=now_ts, abuse_limit=config.bonus_abuse_limit,
+        block_seconds=config.bonus_block_seconds,
     )
+    if status == "blocked":
+        await message.reply(bonus_blocked_text(user, blocked_until, config))
+        return
     if status == "already":
         streak_note = f" Стрик: 🔥 {streak} {days(streak)}." if streak else ""
         await message.reply(
@@ -350,6 +382,18 @@ async def cmd_cancel_duel(message: Message, db: Database, config: Config) -> Non
 @router.message(GroupF, trig(GAMES_TRIGGERS))
 async def cmd_games(message: Message, config: Config) -> None:
     subs = subscribers_phrase(config)
+    watch = config.channel_id is not None and config.bonus_watch_seconds > 0
+    watch_note = (
+        f"\n👀 Бонус под наблюдением {config.bonus_watch_hours:g} ч: отписался — "
+        "бонус сгорает, а вернуть его в тот же день нельзя."
+        if watch else ""
+    )
+    if watch and config.bonus_abuse_limit > 0:
+        block_days = config.bonus_abuse_block_days
+        watch_note += (
+            f" С {config.bonus_abuse_limit} нарушений бонус закрывается на "
+            f"{block_days:g} {days(int(round(block_days)))}."
+        )
     await message.reply(
         "🎮 <b>Игры и бонусы</b>\n\n"
         f"🎁 <b>Бонус</b> — напиши «бонус»: раз в день +{config.bonus_min}–{max(config.bonus_max, config.bonus_min)} 🍬"
@@ -358,6 +402,7 @@ async def cmd_games(message: Message, config: Config) -> None:
             if config.streak_max_extra > 0 else ""
         )
         + (f"\n🔒 Только {subs}" if subs else "")
+        + watch_note
         + "\n\n"
         f"🎰 <b>Слоты</b> — «казино 10» (ставка {fmt(config.casino_min_bet)}–{fmt(config.casino_max_bet)} 🍬):\n"
         "7️⃣7️⃣7️⃣ — х10 • три одинаковых — х5 • две семёрки — возврат\n\n"
