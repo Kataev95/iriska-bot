@@ -18,6 +18,7 @@ from aiogram.types import Message
 from config import Config
 from db import Database
 from handlers.common import GROUP_TYPES, is_bonus_hour
+from handlers.pets import track_pet_message
 from handlers.quiz import handle_possible_answer
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,9 @@ async def on_group_text(message: Message, db: Database, config: Config) -> None:
     text = (message.text or "").strip()
     if text.startswith("/"):  # команды не считаем
         return
+    # Переписка пары кормит общего питомца — даже если сообщение короче
+    # MIN_MSG_LEN или попало под антинакрутку статистики.
+    await track_pet_message(message, db, config)
     if len(text) < config.min_msg_len:
         return
 
@@ -72,3 +76,14 @@ async def on_group_text(message: Message, db: Database, config: Config) -> None:
 
     # Ответ на активную викторину? Сообщение и посчитано, и может выиграть.
     await handle_possible_answer(message, db)
+
+
+@router.message(F.chat.type.in_(GROUP_TYPES), ~F.text)
+async def on_group_other(message: Message, db: Database, config: Config) -> None:
+    """Стикеры, голосовые, фото и т.п.: в статистику не идут, но питомца кормят.
+
+    Как в TikTok: ответить другу стикером — тоже «написать».
+    """
+    if message.new_chat_members or message.left_chat_member or message.pinned_message:
+        return  # служебные сообщения — не переписка
+    await track_pet_message(message, db, config)
