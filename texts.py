@@ -55,6 +55,7 @@ def help_text(
     per: int, threshold: int, min_len: int, cooldown: float,
     contact: str, hours_line: str = "", dedupe: bool = True,
     bonus_for: str = "", shop: bool = False, bonus_watch: str = "",
+    pets: bool = False,
 ) -> str:
     rules = [
         "• считаются текстовые сообщения"
@@ -103,5 +104,11 @@ def help_text(
             "\n🛍 Магазин: /shop — трать ириски на услуги чата, "
             "после покупки админ свяжется с тобой."
             if shop else ""
+        )
+        + (
+            "\n🐣 Питомец: ответь «питомец» на сообщение друга и пишите друг "
+            "другу каждый день — питомец растёт, пока серия не прервётся "
+            "(«мои питомцы», «как растить питомца»)."
+            if pets else ""
         )
     )
