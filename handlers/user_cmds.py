@@ -213,6 +213,7 @@ async def cmd_help(message: Message, config: Config) -> None:
             bonus_for=subscribers_phrase(config),
             shop=config.shop_enabled,
             bonus_watch=bonus_watch,
+            pets=config.pets_enabled,
         )
     )
 
