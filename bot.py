@@ -27,6 +27,7 @@ from handlers import (
     admin_router,
     counting_router,
     games_router,
+    pets_router,
     quiz_router,
     shop_router,
     user_router,
@@ -37,6 +38,7 @@ from handlers.common import (
     is_bonus_hour,
     mention,
 )
+from handlers.pets import pet_keeper
 from handlers.quiz import load_active_chats, resume_queues
 from monthly import monthly_stats_announcer
 from subscription import (
@@ -203,6 +205,8 @@ async def set_commands(bot: Bot, config: Config) -> None:
         BotCommand(command="day", description="Топ за сегодня"),
         BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
         BotCommand(command="games", description="Правила игр"),
+        BotCommand(command="pets", description="Мои питомцы 🐣"),
+        BotCommand(command="pettop", description="Топ питомцев чата"),
         BotCommand(command="shop", description="Магазин за ириски 🛍"),
         BotCommand(command="hours", description="Бонусные часы ⏰"),
         BotCommand(command="withdraw", description="Вывести ириски"),
@@ -268,6 +272,7 @@ async def main() -> None:
     dp.include_router(user_router)
     dp.include_router(shop_router)
     dp.include_router(games_router)
+    dp.include_router(pets_router)
     dp.include_router(counting_router)
 
     announcer = asyncio.create_task(bonus_hours_announcer(bot, db, config))
@@ -275,6 +280,7 @@ async def main() -> None:
         monthly_stats_announcer(bot, db, config)
     )
     watchdog = asyncio.create_task(bonus_watchdog(bot, db, config))
+    pets_keeper = asyncio.create_task(pet_keeper(bot, db, config))
     try:
         await set_commands(bot, config)
         await load_active_chats(db)   # викторины, пережившие рестарт
@@ -294,8 +300,10 @@ async def main() -> None:
         announcer.cancel()
         monthly_announcer.cancel()
         watchdog.cancel()
+        pets_keeper.cancel()
         await asyncio.gather(
-            announcer, monthly_announcer, watchdog, return_exceptions=True
+            announcer, monthly_announcer, watchdog, pets_keeper,
+            return_exceptions=True,
         )
         await db.close()
 

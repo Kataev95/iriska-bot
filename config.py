@@ -179,6 +179,26 @@ class Config:
     bonus_abuse_block_days: float = 7.0
     # Писать ли в чат «бонус сгорел» при отзыве за отписку.
     bonus_revoke_notice: bool = True
+    # --- 🐣 Общий питомец (серия как «огонёк» в TikTok) ---
+    pets_enabled: bool = True
+    # Сколько питомцев может быть у одного участника в чате (0 — без лимита).
+    pet_max_per_user: int = 5
+    # Сколько секунд живёт приглашение завести питомца.
+    pet_invite_ttl: float = 600.0
+    # Цена возвращения сбежавшего питомца (серии), ирисок. 0 — бесплатно.
+    pet_restore_price: int = 20
+    # Сколько часов после побега питомца можно вернуть (0 — нельзя).
+    pet_restore_hours: float = 24.0
+    # Час напоминания «питомец голодает» (по BOT_TZ); -1 — не напоминать.
+    pet_remind_hour: int = 20
+    # Награды за серию: «3=2,7=5» — на 3-й день по 2 🍬 каждому и т.д.
+    pet_rewards: str = "3=2,7=5,14=10,30=20,100=50"
+    # Писать ли в чат «питомец накормлен» каждый день.
+    pet_feed_notice: bool = True
+
+    @property
+    def pet_restore_seconds(self) -> float:
+        return max(self.pet_restore_hours, 0.0) * 3600.0
 
     @property
     def bonus_watch_seconds(self) -> float:
@@ -245,4 +265,16 @@ def load_config() -> Config:
         bonus_abuse_limit=_int_env("BONUS_ABUSE_LIMIT", 2),
         bonus_abuse_block_days=_float_env("BONUS_ABUSE_BLOCK_DAYS", 7.0),
         bonus_revoke_notice=_bool_env("BONUS_REVOKE_NOTICE", True),
+        pets_enabled=_bool_env("PETS_ENABLED", True),
+        pet_max_per_user=_int_env("PET_MAX_PER_USER", 5),
+        pet_invite_ttl=_float_env("PET_INVITE_TTL", 600.0),
+        pet_restore_price=_int_env("PET_RESTORE_PRICE", 20),
+        pet_restore_hours=_float_env("PET_RESTORE_HOURS", 24.0),
+        pet_remind_hour=_int_env("PET_REMIND_HOUR", 20),
+        pet_rewards=(
+            os.getenv("PET_REWARDS")
+            if os.getenv("PET_REWARDS") is not None
+            else "3=2,7=5,14=10,30=20,100=50"
+        ).strip(),
+        pet_feed_notice=_bool_env("PET_FEED_NOTICE", True),
     )

@@ -88,12 +88,39 @@ CREATE TABLE IF NOT EXISTS orders (
     resolved_by INTEGER
 );
 
+-- 🐣 Общий питомец пары (как «огонёк» в TikTok). user_a < user_b.
+-- status: pending (приглашение) -> active; declined / expired / abandoned.
+-- a_day / b_day — последний день, когда A написал B и B написал A.
+CREATE TABLE IF NOT EXISTS pets (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id         INTEGER NOT NULL,
+    user_a          INTEGER NOT NULL,
+    user_b          INTEGER NOT NULL,
+    invited_by      INTEGER NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    species         TEXT    NOT NULL,
+    name            TEXT,
+    streak          INTEGER NOT NULL DEFAULT 0,
+    best_streak     INTEGER NOT NULL DEFAULT 0,
+    last_fed_day    TEXT,
+    a_day           TEXT,
+    b_day           TEXT,
+    lost_streak     INTEGER NOT NULL DEFAULT 0,
+    lost_ts         REAL    NOT NULL DEFAULT 0,
+    last_remind_day TEXT,
+    created_ts      REAL    NOT NULL,
+    resolved_ts     REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_daily_chat_day ON daily_stats (chat_id, day);
 CREATE INDEX IF NOT EXISTS idx_users_top ON users (chat_id, total_counted DESC);
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (chat_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_duels_pending ON duels (chat_id, status);
 CREATE INDEX IF NOT EXISTS idx_quizzes_active ON quizzes (chat_id, status);
 CREATE INDEX IF NOT EXISTS idx_orders_chat ON orders (chat_id, status, id);
+CREATE INDEX IF NOT EXISTS idx_pets_chat ON pets (chat_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pets_pair ON pets (chat_id, user_a, user_b)
+    WHERE status IN ('pending', 'active');
 """
 
 
@@ -1089,3 +1116,361 @@ class Database:
             )
             await db.commit()
             return "ok", winner_balance, loser_balance
+
+    # ---------- 🐣 общий питомец ----------
+
+    @staticmethod
+    def _pair(u1: int, u2: int) -> tuple[int, int]:
+        return (u1, u2) if u1 < u2 else (u2, u1)
+
+    async def get_pet(self, pet_id: int) -> aiosqlite.Row | None:
+        cur = await self._require().execute(
+            "SELECT * FROM pets WHERE id = ?", (pet_id,)
+        )
+        return await cur.fetchone()
+
+    async def pet_for_pair(
+        self, chat_id: int, u1: int, u2: int,
+    ) -> aiosqlite.Row | None:
+        """Живой питомец (или висящее приглашение) пары в чате."""
+        a, b = self._pair(u1, u2)
+        cur = await self._require().execute(
+            "SELECT * FROM pets WHERE chat_id = ? AND user_a = ? AND user_b = ? "
+            "AND status IN ('pending', 'active') ORDER BY id DESC LIMIT 1",
+            (chat_id, a, b),
+        )
+        return await cur.fetchone()
+
+    async def user_pets(self, chat_id: int, user_id: int) -> list[aiosqlite.Row]:
+        """Активные питомцы участника: самые длинные серии первыми."""
+        cur = await self._require().execute(
+            "SELECT * FROM pets WHERE chat_id = ? AND status = 'active' "
+            "AND (user_a = ? OR user_b = ?) "
+            "ORDER BY streak DESC, best_streak DESC, id",
+            (chat_id, user_id, user_id),
+        )
+        return list(await cur.fetchall())
+
+    async def _active_pet_count(self, chat_id: int, user_id: int) -> int:
+        cur = await self._require().execute(
+            "SELECT COUNT(*) AS c FROM pets WHERE chat_id = ? AND status = 'active' "
+            "AND (user_a = ? OR user_b = ?)",
+            (chat_id, user_id, user_id),
+        )
+        return int((await cur.fetchone())["c"])
+
+    async def expire_pet_invites(self, now_ts: float, ttl: float) -> int:
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "UPDATE pets SET status = 'expired', resolved_ts = ? "
+                "WHERE status = 'pending' AND created_ts < ?",
+                (now_ts, now_ts - ttl),
+            )
+            await db.commit()
+            return int(cur.rowcount)
+
+    async def create_pet_invite(
+        self, chat_id: int, inviter: int, target: int, species: str,
+        now_ts: float, max_per_user: int,
+    ) -> tuple[str, aiosqlite.Row | None]:
+        """Приглашение завести питомца. Возвращает (статус, строка питомца):
+
+        - ("ok", новое приглашение);
+        - ("exists", питомец или приглашение, которое уже есть у пары);
+        - ("limit_inviter" | "limit_target", None) — у кого-то уже максимум.
+        """
+        a, b = self._pair(inviter, target)
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT * FROM pets WHERE chat_id = ? AND user_a = ? AND user_b = ? "
+                "AND status IN ('pending', 'active') LIMIT 1",
+                (chat_id, a, b),
+            )
+            row = await cur.fetchone()
+            if row is not None:
+                return "exists", row
+            if max_per_user > 0:
+                if await self._active_pet_count(chat_id, inviter) >= max_per_user:
+                    return "limit_inviter", None
+                if await self._active_pet_count(chat_id, target) >= max_per_user:
+                    return "limit_target", None
+            cur = await db.execute(
+                "INSERT INTO pets (chat_id, user_a, user_b, invited_by, species, "
+                "created_ts) VALUES (?, ?, ?, ?, ?, ?)",
+                (chat_id, a, b, inviter, species, now_ts),
+            )
+            pet_id = int(cur.lastrowid)
+            await db.commit()
+            cur = await db.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
+            return "ok", await cur.fetchone()
+
+    async def answer_pet_invite(
+        self, pet_id: int, user_id: int, accept: bool,
+        now_ts: float, ttl: float, max_per_user: int,
+    ) -> tuple[str, aiosqlite.Row | None]:
+        """Ответ на приглашение.
+
+        Принять может только приглашённый; отказаться — он же, а пригласивший
+        может отозвать приглашение. Статусы: "accepted", "declined",
+        "cancelled", "not_yours", "gone" (уже решено или нет), "expired",
+        "limit" (у кого-то уже максимум питомцев).
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
+            row = await cur.fetchone()
+            if row is None or row["status"] != "pending":
+                return "gone", row
+            if user_id not in (row["user_a"], row["user_b"]):
+                return "not_yours", row
+            if now_ts - float(row["created_ts"]) > ttl:
+                await db.execute(
+                    "UPDATE pets SET status = 'expired', resolved_ts = ? WHERE id = ?",
+                    (now_ts, pet_id),
+                )
+                await db.commit()
+                return "expired", row
+            is_inviter = user_id == row["invited_by"]
+            if not accept:
+                status = "cancelled" if is_inviter else "declined"
+                await db.execute(
+                    "UPDATE pets SET status = 'declined', resolved_ts = ? WHERE id = ?",
+                    (now_ts, pet_id),
+                )
+                await db.commit()
+                return status, row
+            if is_inviter:
+                return "not_yours", row
+            if max_per_user > 0:
+                for uid in (row["user_a"], row["user_b"]):
+                    if await self._active_pet_count(row["chat_id"], uid) >= max_per_user:
+                        return "limit", row
+            await db.execute(
+                "UPDATE pets SET status = 'active', resolved_ts = ? WHERE id = ?",
+                (now_ts, pet_id),
+            )
+            await db.commit()
+            cur = await db.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
+            return "accepted", await cur.fetchone()
+
+    async def record_pet_message(
+        self, chat_id: int, from_id: int, to_id: int,
+        day: str, yesterday: str, rewards: dict[int, int] | None = None,
+    ) -> dict | None:
+        """Отмечает, что from_id написал to_id сегодня.
+
+        Если у пары есть активный питомец и сегодня написали оба — питомец
+        «накормлен»: серия растёт (+1, если вчера тоже кормили, иначе с 1),
+        а на круглых сериях из rewards обоим начисляются ириски.
+
+        Возвращает None, если питомца нет, иначе словарь:
+        fed (накормлен этим сообщением), streak, prev_best, reward, pet.
+        """
+        if from_id == to_id:
+            return None
+        a, b = self._pair(from_id, to_id)
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT * FROM pets WHERE chat_id = ? AND user_a = ? AND user_b = ? "
+                "AND status = 'active' LIMIT 1",
+                (chat_id, a, b),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            side = "a_day" if from_id == a else "b_day"
+            a_day = day if side == "a_day" else row["a_day"]
+            b_day = day if side == "b_day" else row["b_day"]
+            fed = a_day == day and b_day == day and row["last_fed_day"] != day
+            streak = int(row["streak"])
+            prev_best = int(row["best_streak"])
+            reward = 0
+            if fed:
+                streak = streak + 1 if row["last_fed_day"] == yesterday else 1
+                best = max(prev_best, streak)
+                await db.execute(
+                    f"UPDATE pets SET {side} = ?, streak = ?, best_streak = ?, "
+                    "last_fed_day = ?, lost_streak = 0, lost_ts = 0 WHERE id = ?",
+                    (day, streak, best, day, row["id"]),
+                )
+                reward = int((rewards or {}).get(streak, 0))
+                if reward > 0:
+                    for uid in (a, b):
+                        await db.execute(
+                            "INSERT OR IGNORE INTO users (chat_id, user_id) "
+                            "VALUES (?, ?)",
+                            (chat_id, uid),
+                        )
+                        await db.execute(
+                            "UPDATE users SET balance = balance + ?, "
+                            "earned_total = earned_total + ? "
+                            "WHERE chat_id = ? AND user_id = ?",
+                            (reward, reward, chat_id, uid),
+                        )
+                        await db.execute(
+                            "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                            "VALUES (?, ?, ?, ?)",
+                            (chat_id, uid, reward,
+                             f"питомец: серия {streak} дн."),
+                        )
+            elif row[side] != day:
+                await db.execute(
+                    f"UPDATE pets SET {side} = ? WHERE id = ?", (day, row["id"])
+                )
+            else:
+                return {"fed": False, "streak": streak, "prev_best": prev_best,
+                        "reward": 0, "pet": row}
+            await db.commit()
+            cur = await db.execute("SELECT * FROM pets WHERE id = ?", (row["id"],))
+            pet = await cur.fetchone()
+            return {"fed": fed, "streak": streak, "prev_best": prev_best,
+                    "reward": reward, "pet": pet}
+
+    async def sweep_lost_pets(
+        self, yesterday: str, now_ts: float,
+    ) -> list[aiosqlite.Row]:
+        """Питомцы, которых не кормили вчера, сбегают: серия -> 0.
+
+        Прежняя серия сохраняется в lost_streak — её можно вернуть за ириски
+        (restore_pet). Возвращает только что сбежавших.
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT * FROM pets WHERE status = 'active' AND streak > 0 "
+                "AND last_fed_day IS NOT NULL AND last_fed_day < ?",
+                (yesterday,),
+            )
+            rows = list(await cur.fetchall())
+            if not rows:
+                return []
+            ids = [int(r["id"]) for r in rows]
+            marks = ",".join("?" * len(ids))
+            await db.execute(
+                f"UPDATE pets SET lost_streak = streak, lost_ts = ?, streak = 0 "
+                f"WHERE id IN ({marks})",
+                (now_ts, *ids),
+            )
+            await db.commit()
+            cur = await db.execute(
+                f"SELECT * FROM pets WHERE id IN ({marks}) ORDER BY chat_id, id",
+                ids,
+            )
+            return list(await cur.fetchall())
+
+    async def restore_pet(
+        self, pet_id: int, payer_id: int, price: int,
+        now_ts: float, window_seconds: float, yesterday: str,
+    ) -> tuple[str, int, aiosqlite.Row | None]:
+        """Вернуть сбежавшего питомца за ириски (платит payer_id).
+
+        Возвращает (статус, баланс плательщика, питомец):
+        "ok", "nothing" (возвращать нечего), "expired" (окно прошло),
+        "insufficient" (не хватает ирисок).
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
+            row = await cur.fetchone()
+            if row is None or row["status"] != "active" or int(row["lost_streak"]) <= 0:
+                return "nothing", 0, row
+            if now_ts - float(row["lost_ts"]) > window_seconds:
+                await db.execute(
+                    "UPDATE pets SET lost_streak = 0, lost_ts = 0 WHERE id = ?",
+                    (pet_id,),
+                )
+                await db.commit()
+                return "expired", 0, row
+            cur = await db.execute(
+                "SELECT balance FROM users WHERE chat_id = ? AND user_id = ?",
+                (row["chat_id"], payer_id),
+            )
+            urow = await cur.fetchone()
+            balance = int(urow["balance"]) if urow else 0
+            if balance < price:
+                return "insufficient", balance, row
+            new_balance = balance - price
+            if price > 0:
+                await db.execute(
+                    "UPDATE users SET balance = ? WHERE chat_id = ? AND user_id = ?",
+                    (new_balance, row["chat_id"], payer_id),
+                )
+                await db.execute(
+                    "INSERT INTO ledger (chat_id, user_id, amount, reason) "
+                    "VALUES (?, ?, ?, 'питомец: возвращение серии')",
+                    (row["chat_id"], payer_id, -price),
+                )
+            await db.execute(
+                "UPDATE pets SET streak = lost_streak, lost_streak = 0, lost_ts = 0, "
+                "last_fed_day = ? WHERE id = ?",
+                (yesterday, pet_id),
+            )
+            await db.commit()
+            cur = await db.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
+            return "ok", new_balance, await cur.fetchone()
+
+    async def rename_pet(self, pet_id: int, name: str) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "UPDATE pets SET name = ? WHERE id = ?", (name or None, pet_id)
+            )
+            await db.commit()
+
+    async def abandon_pet(self, pet_id: int, user_id: int, now_ts: float) -> bool:
+        """Отпустить питомца (может любой из пары). False — нечего отпускать."""
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "UPDATE pets SET status = 'abandoned', resolved_ts = ? "
+                "WHERE id = ? AND status = 'active' AND (user_a = ? OR user_b = ?)",
+                (now_ts, pet_id, user_id, user_id),
+            )
+            await db.commit()
+            return bool(cur.rowcount)
+
+    async def pets_to_remind(self, today: str, yesterday: str) -> list[aiosqlite.Row]:
+        """Питомцы под угрозой: кормили вчера, сегодня ещё нет.
+
+        Каждого питомца отмечаем, чтобы напоминание ушло раз в день.
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT * FROM pets WHERE status = 'active' AND streak > 0 "
+                "AND last_fed_day = ? AND COALESCE(last_remind_day, '') != ? "
+                "ORDER BY chat_id, streak DESC, id",
+                (yesterday, today),
+            )
+            rows = list(await cur.fetchall())
+            if rows:
+                ids = [int(r["id"]) for r in rows]
+                marks = ",".join("?" * len(ids))
+                await db.execute(
+                    f"UPDATE pets SET last_remind_day = ? WHERE id IN ({marks})",
+                    (today, *ids),
+                )
+                await db.commit()
+            return rows
+
+    async def top_pets(self, chat_id: int, limit: int = 10) -> list[aiosqlite.Row]:
+        cur = await self._require().execute(
+            "SELECT * FROM pets WHERE chat_id = ? AND status = 'active' "
+            "AND best_streak > 0 ORDER BY streak DESC, best_streak DESC, id LIMIT ?",
+            (chat_id, limit),
+        )
+        return list(await cur.fetchall())
+
+    async def user_names(self, chat_id: int, user_ids: list[int]) -> dict[int, aiosqlite.Row]:
+        if not user_ids:
+            return {}
+        marks = ",".join("?" * len(user_ids))
+        cur = await self._require().execute(
+            f"SELECT user_id, username, first_name FROM users "
+            f"WHERE chat_id = ? AND user_id IN ({marks})",
+            (chat_id, *user_ids),
+        )
+        return {int(r["user_id"]): r for r in await cur.fetchall()}
