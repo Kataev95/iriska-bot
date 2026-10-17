@@ -165,14 +165,14 @@ async def run() -> None:
     from handlers.games import slot_multiplier, slot_reels
 
     assert slot_reels(64) == (3, 3, 3)
-    assert slot_multiplier(64)[0] == 10          # джекпот 777
+    assert slot_multiplier(64)[0] == 3           # джекпот 777
     for v in (1, 22, 43):
-        assert slot_multiplier(v)[0] == 5, v     # три одинаковых
+        assert slot_multiplier(v)[0] == 2, v     # три одинаковых
     assert slot_multiplier(16)[0] == 1           # (3,3,0) — две семёрки
     assert slot_multiplier(52)[0] == 1           # (3,0,3) — две семёрки
     assert slot_multiplier(37)[0] == 0           # (0,1,2) — мимо
     total_ev = sum(slot_multiplier(v)[0] for v in range(1, 65))
-    assert total_ev == 10 + 5 * 3 + 1 * 9, total_ev  # дом в плюсе: 34/64
+    assert total_ev == 3 + 2 * 3 + 1 * 9, total_ev  # дом в плюсе: 18/64
 
     # --- Антиспам выключен: короткие, подряд и с повторами — считаются ---
     USER4 = 444
