@@ -57,9 +57,9 @@ def slot_multiplier(value: int) -> tuple[int, str]:
     """Множитель выплаты и подпись результата."""
     a, b, c = slot_reels(value)
     if (a, b, c) == (3, 3, 3):
-        return 10, "7️⃣7️⃣7️⃣ ДЖЕКПОТ!"
+        return 3, "7️⃣7️⃣7️⃣ ДЖЕКПОТ!"
     if a == b == c:
-        return 5, "Три в ряд!"
+        return 2, "Три в ряд!"
     if (a == 3) + (b == 3) + (c == 3) == 2:
         return 1, "Две семёрки — ставка вернулась."
     return 0, "Мимо 😔"
@@ -165,7 +165,7 @@ async def cmd_casino(
     if raw is None or not raw.isdigit():
         await message.reply(
             "🎰 Слоты: напиши <b>«казино 10»</b> или /casino 10 — ставка спишется с баланса.\n"
-            "Выплаты: 7️⃣7️⃣7️⃣ — х10, три одинаковых — х5, две семёрки — возврат ставки."
+            "Выплаты: 7️⃣7️⃣7️⃣ — х3, три одинаковых — х2, две семёрки — возврат ставки."
         )
         return
     bet = int(raw)
@@ -231,7 +231,7 @@ async def casino_hint(message: Message, config: Config) -> None:
     await message.reply(
         f"🎰 Напиши <b>«казино N»</b>, где N — ставка от {fmt(config.casino_min_bet)} "
         f"до {fmt(config.casino_max_bet)} 🍬\n"
-        "Выплаты: 7️⃣7️⃣7️⃣ — х10, три одинаковых — х5, две семёрки — возврат ставки."
+        "Выплаты: 7️⃣7️⃣7️⃣ — х3, три одинаковых — х2, две семёрки — возврат ставки."
     )
 
 
@@ -405,7 +405,7 @@ async def cmd_games(message: Message, config: Config) -> None:
         + watch_note
         + "\n\n"
         f"🎰 <b>Слоты</b> — «казино 10» (ставка {fmt(config.casino_min_bet)}–{fmt(config.casino_max_bet)} 🍬):\n"
-        "7️⃣7️⃣7️⃣ — х10 • три одинаковых — х5 • две семёрки — возврат\n\n"
+        "7️⃣7️⃣7️⃣ — х3 • три одинаковых — х2 • две семёрки — возврат\n\n"
         f"⚔️ <b>Дуэль</b> — ответь «дуэль 10» на сообщение соперника "
         f"(ставка {fmt(config.duel_min_bet)}–{fmt(config.duel_max_bet)} 🍬). "
         "Тот пишет «принять» или «отказ». Монетка решает — победитель забирает банк.\n\n"
