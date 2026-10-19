@@ -203,7 +203,6 @@ async def set_commands(bot: Bot, config: Config) -> None:
         BotCommand(command="top", description="Топ чата за текущий месяц"),
         BotCommand(command="week", description="Топ за 7 дней"),
         BotCommand(command="day", description="Топ за сегодня"),
-        BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
         BotCommand(command="games", description="Правила игр"),
         BotCommand(command="pets", description="Мои питомцы 🐣"),
         BotCommand(command="pettop", description="Топ питомцев чата"),
