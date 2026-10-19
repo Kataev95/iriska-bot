@@ -145,9 +145,6 @@ class Config:
     bonus_max: int
     streak_max_extra: int
     games_enabled: bool
-    casino_min_bet: int
-    casino_max_bet: int
-    casino_cooldown: float
     duel_min_bet: int
     duel_max_bet: int
     duel_ttl: float
@@ -240,9 +237,6 @@ def load_config() -> Config:
         bonus_max=_int_env("BONUS_MAX", 2),
         streak_max_extra=_int_env("STREAK_MAX_EXTRA", 3),
         games_enabled=_bool_env("GAMES_ENABLED", True),
-        casino_min_bet=_int_env("CASINO_MIN_BET", 1),
-        casino_max_bet=_int_env("CASINO_MAX_BET", 50),
-        casino_cooldown=_float_env("CASINO_COOLDOWN", 30.0),
         duel_min_bet=_int_env("DUEL_MIN_BET", 1),
         duel_max_bet=_int_env("DUEL_MAX_BET", 100),
         duel_ttl=_float_env("DUEL_TTL", 300.0),
