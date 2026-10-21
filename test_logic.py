@@ -161,6 +161,19 @@ async def run() -> None:
     await db.expire_old_duels(CHAT, now + 40 + 400, ttl=300)
     assert not await db.has_pending_duel(CHAT, USER1), "дуэль не протухла"
 
+    # --- Слоты: раскладка выплат ---
+    from handlers.games import slot_multiplier, slot_reels
+
+    assert slot_reels(64) == (3, 3, 3)
+    assert slot_multiplier(64)[0] == 3           # джекпот 777
+    for v in (1, 22, 43):
+        assert slot_multiplier(v)[0] == 2, v     # три одинаковых
+    assert slot_multiplier(16)[0] == 1           # (3,3,0) — две семёрки
+    assert slot_multiplier(52)[0] == 1           # (3,0,3) — две семёрки
+    assert slot_multiplier(37)[0] == 0           # (0,1,2) — мимо
+    total_ev = sum(slot_multiplier(v)[0] for v in range(1, 65))
+    assert total_ev == 3 + 2 * 3 + 1 * 9, total_ev  # дом в плюсе: 18/64
+
     # --- Антиспам выключен: короткие, подряд и с повторами — считаются ---
     USER4 = 444
     for i in range(3):
@@ -1350,7 +1363,7 @@ async def run_bonus_watch() -> None:
         assert await claim(abuser, day1, day0, now + 180) == "already"
         assert (await db.get_user(CHAT, abuser))["balance"] == 0
 
-        # Сплит в минус не уходит: ириски уже потрачены (например, в дуэли)
+        # Сплит в минус не уходит: ириски уже потрачены (например, в казино)
         spender = 9102
         assert await claim(spender, day1, day0, now) == "ok"
         await db.adjust_balance(CHAT, spender, -2, "тест: потратил бонус", None)
