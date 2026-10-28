@@ -27,6 +27,19 @@ def trig(words: set[str]):
     return F.text.func(lambda t: norm(t) in words)
 
 
+def replied_message(message):
+    """Сообщение, на которое ответили, — но не служебное «создана тема».
+
+    В форумах Telegram каждое сообщение темы формально «отвечает» на её
+    служебное сообщение. Без этой проверки «дуэль 10» или /give в теме
+    без явного ответа ушли бы автору темы.
+    """
+    reply = message.reply_to_message
+    if reply is None or reply.forum_topic_created is not None:
+        return None
+    return reply
+
+
 def mention(user_id: int, first_name: str | None, username: str | None) -> str:
     """HTML-упоминание участника: кликабельное имя по Telegram ID."""
     name = (first_name or "").strip() or (("@" + username) if username else "боец")
