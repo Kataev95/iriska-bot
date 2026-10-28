@@ -355,6 +355,24 @@ async def check_handlers() -> None:
             bot, db, cfg, now=datetime.datetime.now(cfg.tz).replace(hour=22))
         assert reminded == 0, "раз в день"
 
+        # Аудит: «принять» без дуэли не глотается — идёт в статистику
+        await say(C, "всем привет")
+        cnt = (await db.get_user(CHAT, C))["total_counted"]
+        _, out = await say(C, "принять")
+        assert out == [] and (await db.get_user(CHAT, C))["total_counted"] == cnt + 1
+        # Аудит: в теме форума «ответ» на служебное сообщение — не соперник
+        from aiogram.types import ForumTopicCreated
+        topic = Message(message_id=4000, date=datetime.datetime.now(), chat=chat,
+                        from_user=user(C),
+                        forum_topic_created=ForumTopicCreated(name="t", icon_color=1))
+        msgs[4000] = topic
+        _, out = await say(A, "дуэль 1", reply_to=4000)
+        assert "ответом на сообщение соперника" in out[0].text, out[0].text
+        # Аудит: возврат не раздувает «всего заработано»
+        earned = (await db.get_user(CHAT, A))["earned_total"]
+        await db.adjust_balance(CHAT, A, 5, "тест: возврат", None, earned=0)
+        assert (await db.get_user(CHAT, A))["earned_total"] == earned
+
         await check_menu(db, cfg, pet["id"], say, press, body, session,
                          process_pet_day, process_pet_events, bot)
 
