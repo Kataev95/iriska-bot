@@ -51,14 +51,15 @@ class Stage:
     min_streak: int
     title: str
     badge: str
+    code: str  # часть имени картинки: assets/pets/{вид}_{code}.jpg
 
 
 # Стадии роста по длине серии (дней подряд).
 STAGES: tuple[Stage, ...] = (
-    Stage(1, "Малыш", "🍼"),
-    Stage(7, "Подросток", "🎒"),
-    Stage(30, "Взрослый", "💪"),
-    Stage(100, "Легенда", "👑"),
+    Stage(1, "Малыш", "🍼", "baby"),
+    Stage(7, "Подросток", "🎒", "teen"),
+    Stage(30, "Взрослый", "💪", "adult"),
+    Stage(100, "Легенда", "👑", "legend"),
 )
 
 

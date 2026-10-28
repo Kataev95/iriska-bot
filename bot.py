@@ -27,6 +27,7 @@ from handlers import (
     admin_router,
     counting_router,
     games_router,
+    pet_menu_router,
     pets_router,
     quiz_router,
     shop_router,
@@ -38,6 +39,7 @@ from handlers.common import (
     is_bonus_hour,
     mention,
 )
+from handlers.pet_menu import pet_events_keeper
 from handlers.pets import pet_keeper
 from handlers.quiz import load_active_chats, resume_queues
 from monthly import monthly_stats_announcer
@@ -205,7 +207,7 @@ async def set_commands(bot: Bot, config: Config) -> None:
         BotCommand(command="day", description="Топ за сегодня"),
         BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
         BotCommand(command="games", description="Правила игр"),
-        BotCommand(command="pets", description="Мои питомцы 🐣"),
+        BotCommand(command="pets", description="Мой питомец: карточка с кнопками 🐾"),
         BotCommand(command="pettop", description="Топ питомцев чата"),
         BotCommand(command="shop", description="Магазин за ириски 🛍"),
         BotCommand(command="hours", description="Бонусные часы ⏰"),
@@ -273,6 +275,7 @@ async def main() -> None:
     dp.include_router(shop_router)
     dp.include_router(games_router)
     dp.include_router(pets_router)
+    dp.include_router(pet_menu_router)
     dp.include_router(counting_router)
 
     announcer = asyncio.create_task(bonus_hours_announcer(bot, db, config))
@@ -281,6 +284,7 @@ async def main() -> None:
     )
     watchdog = asyncio.create_task(bonus_watchdog(bot, db, config))
     pets_keeper = asyncio.create_task(pet_keeper(bot, db, config))
+    pets_events = asyncio.create_task(pet_events_keeper(bot, db, config))
     try:
         await set_commands(bot, config)
         await load_active_chats(db)   # викторины, пережившие рестарт
@@ -301,8 +305,9 @@ async def main() -> None:
         monthly_announcer.cancel()
         watchdog.cancel()
         pets_keeper.cancel()
+        pets_events.cancel()
         await asyncio.gather(
-            announcer, monthly_announcer, watchdog, pets_keeper,
+            announcer, monthly_announcer, watchdog, pets_keeper, pets_events,
             return_exceptions=True,
         )
         await db.close()

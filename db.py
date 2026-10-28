@@ -112,6 +112,33 @@ CREATE TABLE IF NOT EXISTS pets (
     resolved_ts     REAL
 );
 
+-- 🐾 Питомцы 2.0: картинки (кэш file_id Telegram), кулдауны ухода, события.
+CREATE TABLE IF NOT EXISTS pet_media (
+    key     TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pet_actions (
+    pet_id  INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    action  TEXT    NOT NULL,
+    ts      REAL    NOT NULL,
+    PRIMARY KEY (pet_id, user_id, action)
+);
+
+-- status: open -> done / expired. pressed — кто уже нажал (через запятую).
+CREATE TABLE IF NOT EXISTS pet_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pet_id      INTEGER NOT NULL,
+    chat_id     INTEGER NOT NULL,
+    kind        TEXT    NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'open',
+    pressed     TEXT    NOT NULL DEFAULT '',
+    message_id  INTEGER,
+    created_ts  REAL    NOT NULL,
+    expires_ts  REAL    NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_daily_chat_day ON daily_stats (chat_id, day);
 CREATE INDEX IF NOT EXISTS idx_users_top ON users (chat_id, total_counted DESC);
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger (chat_id, user_id);
@@ -121,6 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_chat ON orders (chat_id, status, id);
 CREATE INDEX IF NOT EXISTS idx_pets_chat ON pets (chat_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pets_pair ON pets (chat_id, user_a, user_b)
     WHERE status IN ('pending', 'active');
+CREATE INDEX IF NOT EXISTS idx_pet_events_open ON pet_events (status, expires_ts);
 """
 
 
@@ -175,6 +203,24 @@ class Database:
                 "ALTER TABLE users ADD COLUMN bonus_blocked_until "
                 "REAL NOT NULL DEFAULT 0"
             )
+        # 🐾 Питомцы 2.0: шкалы ухода, аксессуары, заморозки, домик, события.
+        cur = await db.execute("PRAGMA table_info(pets)")
+        pcols = {row["name"] for row in await cur.fetchall()}
+        for col, ddl in (
+            ("food", "REAL NOT NULL DEFAULT 80"),
+            ("joy", "REAL NOT NULL DEFAULT 80"),
+            ("energy", "REAL NOT NULL DEFAULT 80"),
+            ("care_ts", "REAL NOT NULL DEFAULT 0"),
+            ("items", "TEXT NOT NULL DEFAULT ''"),
+            ("worn", "TEXT NOT NULL DEFAULT ''"),
+            ("freezes", "INTEGER NOT NULL DEFAULT 0"),
+            ("house", "INTEGER NOT NULL DEFAULT 0"),
+            ("next_event_ts", "REAL NOT NULL DEFAULT 0"),
+            ("events_day", "TEXT"),
+            ("events_count", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if pcols and col not in pcols:
+                await db.execute(f"ALTER TABLE pets ADD COLUMN {col} {ddl}")
         cur = await db.execute("PRAGMA table_info(quizzes)")
         qcols = {row["name"] for row in await cur.fetchall()}
         if qcols and "seq" not in qcols:
@@ -1411,6 +1457,176 @@ class Database:
             await db.commit()
             cur = await db.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
             return "ok", new_balance, await cur.fetchone()
+
+    # ---------- 🐾 питомцы 2.0 ----------
+
+    PET_FIELDS = frozenset({
+        "food", "joy", "energy", "care_ts", "items", "worn", "freezes", "house",
+        "next_event_ts", "events_day", "events_count",
+    })
+
+    async def update_pet(self, pet_id: int, **fields) -> aiosqlite.Row | None:
+        """Обновить поля ухода питомца (только из белого списка)."""
+        bad = set(fields) - self.PET_FIELDS
+        if bad:
+            raise ValueError(f"нельзя менять поля питомца: {bad}")
+        db = self._require()
+        async with self._lock:
+            if fields:
+                sets = ", ".join(f"{k} = ?" for k in fields)
+                await db.execute(
+                    f"UPDATE pets SET {sets} WHERE id = ?", (*fields.values(), pet_id)
+                )
+                await db.commit()
+            cur = await db.execute("SELECT * FROM pets WHERE id = ?", (pet_id,))
+            return await cur.fetchone()
+
+    async def get_pet_media(self, key: str) -> str | None:
+        cur = await self._require().execute(
+            "SELECT file_id FROM pet_media WHERE key = ?", (key,)
+        )
+        row = await cur.fetchone()
+        return row["file_id"] if row else None
+
+    async def set_pet_media(self, key: str, file_id: str) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "INSERT INTO pet_media (key, file_id) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET file_id = excluded.file_id",
+                (key, file_id),
+            )
+            await db.commit()
+
+    async def drop_pet_media(self, key: str) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute("DELETE FROM pet_media WHERE key = ?", (key,))
+            await db.commit()
+
+    async def get_pet_action(self, pet_id: int, user_id: int, action: str) -> float:
+        cur = await self._require().execute(
+            "SELECT ts FROM pet_actions WHERE pet_id = ? AND user_id = ? AND action = ?",
+            (pet_id, user_id, action),
+        )
+        row = await cur.fetchone()
+        return float(row["ts"]) if row else 0.0
+
+    async def set_pet_action(
+        self, pet_id: int, user_id: int, action: str, ts: float,
+    ) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "INSERT INTO pet_actions (pet_id, user_id, action, ts) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(pet_id, user_id, action) DO UPDATE SET ts = excluded.ts",
+                (pet_id, user_id, action, ts),
+            )
+            await db.commit()
+
+    async def pets_for_events(self) -> list[aiosqlite.Row]:
+        """Живые вылупившиеся питомцы с идущей серией."""
+        cur = await self._require().execute(
+            "SELECT * FROM pets WHERE status = 'active' AND streak > 0 ORDER BY id"
+        )
+        return list(await cur.fetchall())
+
+    async def create_pet_event(
+        self, pet_id: int, chat_id: int, kind: str, now_ts: float, ttl: float,
+    ) -> int:
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "INSERT INTO pet_events (pet_id, chat_id, kind, created_ts, expires_ts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (pet_id, chat_id, kind, now_ts, now_ts + ttl),
+            )
+            await db.commit()
+            return int(cur.lastrowid)
+
+    async def set_pet_event_message(self, event_id: int, message_id: int) -> None:
+        db = self._require()
+        async with self._lock:
+            await db.execute(
+                "UPDATE pet_events SET message_id = ? WHERE id = ?", (message_id, event_id)
+            )
+            await db.commit()
+
+    async def get_pet_event(self, event_id: int) -> aiosqlite.Row | None:
+        cur = await self._require().execute(
+            "SELECT * FROM pet_events WHERE id = ?", (event_id,)
+        )
+        return await cur.fetchone()
+
+    async def press_pet_event(
+        self, event_id: int, user_id: int, now_ts: float, need_both: bool,
+    ) -> tuple[str, aiosqlite.Row | None]:
+        """Нажатие на событие. Возвращает (статус, событие):
+        "gone" — уже закрыто/истекло, "again" — уже нажимал,
+        "wait" — ждём второго (для совместных), "done" — событие закрыто этим нажатием.
+        """
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute("SELECT * FROM pet_events WHERE id = ?", (event_id,))
+            ev = await cur.fetchone()
+            if ev is None or ev["status"] != "open" or float(ev["expires_ts"]) < now_ts:
+                return "gone", ev
+            pressed = [x for x in ev["pressed"].split(",") if x]
+            if str(user_id) in pressed:
+                return "again", ev
+            pressed.append(str(user_id))
+            done = not need_both or len(pressed) >= 2
+            await db.execute(
+                "UPDATE pet_events SET pressed = ?, status = ? WHERE id = ?",
+                (",".join(pressed), "done" if done else "open", event_id),
+            )
+            await db.commit()
+            cur = await db.execute("SELECT * FROM pet_events WHERE id = ?", (event_id,))
+            return ("done" if done else "wait"), await cur.fetchone()
+
+    async def expire_pet_events(self, now_ts: float) -> list[aiosqlite.Row]:
+        """Закрывает просроченные события и возвращает их."""
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT * FROM pet_events WHERE status = 'open' AND expires_ts < ?",
+                (now_ts,),
+            )
+            rows = list(await cur.fetchall())
+            if rows:
+                ids = [int(r["id"]) for r in rows]
+                marks = ",".join("?" * len(ids))
+                await db.execute(
+                    f"UPDATE pet_events SET status = 'expired' WHERE id IN ({marks})", ids
+                )
+                await db.commit()
+            return rows
+
+    async def use_pet_freezes(self, yesterday: str) -> list[aiosqlite.Row]:
+        """🧊 Заморозка: питомцы, пропустившие вчера, но с заморозкой в запасе,
+        не сбегают — тратится одна заморозка, вчерашний день засчитывается."""
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT * FROM pets WHERE status = 'active' AND streak > 0 "
+                "AND freezes > 0 AND last_fed_day IS NOT NULL AND last_fed_day < ?",
+                (yesterday,),
+            )
+            rows = list(await cur.fetchall())
+            if not rows:
+                return []
+            ids = [int(r["id"]) for r in rows]
+            marks = ",".join("?" * len(ids))
+            await db.execute(
+                f"UPDATE pets SET freezes = freezes - 1, last_fed_day = ? "
+                f"WHERE id IN ({marks})",
+                (yesterday, *ids),
+            )
+            await db.commit()
+            cur = await db.execute(
+                f"SELECT * FROM pets WHERE id IN ({marks}) ORDER BY chat_id, id", ids
+            )
+            return list(await cur.fetchall())
 
     async def rename_pet(self, pet_id: int, name: str) -> None:
         db = self._require()
