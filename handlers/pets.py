@@ -205,7 +205,8 @@ async def cmd_pet(message: Message, db: Database, config: Config) -> None:
         return
     target = reply.from_user
     if target.is_bot:
-        await message.reply("Боты питомцев не растят 🤖")
+        # «питомец» ответом на сообщение бота (например, на карточку) — показать карточку
+        await cmd_my_pets(message, db, config)
         return
     if target.id == user.id:
         await message.reply("Питомца растят вдвоём — ответь «питомец» другу 😉")
