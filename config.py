@@ -195,6 +195,9 @@ class Config:
     pet_rewards: str = "3=2,7=5,14=10,30=20,100=50"
     # Писать ли в чат «питомец накормлен» каждый день.
     pet_feed_notice: bool = True
+    # 🎲 События питомца в день (0 — выключить) и сколько часов живёт событие
+    pet_events_per_day: int = 2
+    pet_event_ttl_hours: float = 2.0
 
     @property
     def pet_restore_seconds(self) -> float:
@@ -277,4 +280,6 @@ def load_config() -> Config:
             else "3=2,7=5,14=10,30=20,100=50"
         ).strip(),
         pet_feed_notice=_bool_env("PET_FEED_NOTICE", True),
+        pet_events_per_day=_int_env("PET_EVENTS_PER_DAY", 2),
+        pet_event_ttl_hours=_float_env("PET_EVENT_TTL_HOURS", 2.0),
     )
