@@ -49,6 +49,8 @@ async def on_group_text(message: Message, db: Database, config: Config) -> None:
     # MIN_MSG_LEN или попало под антинакрутку статистики.
     await track_pet_message(message, db, config)
     if len(text) < config.min_msg_len:
+        # В статистику не идёт, но короткий ответ («4») может выиграть викторину
+        await handle_possible_answer(message, db)
         return
 
     now_local = datetime.now(config.tz)
