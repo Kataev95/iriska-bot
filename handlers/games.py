@@ -13,6 +13,7 @@ import secrets
 import time
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
@@ -22,6 +23,7 @@ from handlers.common import (
     GroupF,
     bonus_block_line,
     mention,
+    replied_message,
     today_day,
     trig,
     yesterday_day,
@@ -198,7 +200,8 @@ async def cmd_casino(
         dice_msg = await message.answer_dice(emoji="🎰")
     except Exception:
         # не получилось крутануть — возвращаем ставку
-        await db.adjust_balance(message.chat.id, user.id, bet, "казино: возврат ставки", None)
+        await db.adjust_balance(message.chat.id, user.id, bet, "казино: возврат ставки",
+                                None, earned=0)
         await message.reply("Автомат заело 🎰 Ставка возвращена, попробуй ещё раз.")
         return
 
@@ -211,13 +214,14 @@ async def cmd_casino(
         )
     elif mult == 1:
         _, balance = await db.adjust_balance(
-            message.chat.id, user.id, bet, "казино: возврат ставки", None
+            message.chat.id, user.id, bet, "казино: возврат ставки", None, earned=0
         )
         await dice_msg.reply(f"{label}\nБаланс: <b>{fmt(balance)}</b>")
     else:
         payout = bet * mult
-        _, balance = await db.adjust_balance(
-            message.chat.id, user.id, payout, "казино: выигрыш", None
+        _, balance = await db.adjust_balance(  # «заработано» — только чистый выигрыш
+            message.chat.id, user.id, payout, "казино: выигрыш", None,
+            earned=payout - bet,
         )
         await dice_msg.reply(
             f"🎉 {label} Выигрыш: <b>+{fmt(payout)}</b> 🍬\nБаланс: <b>{fmt(balance)}</b>"
@@ -249,7 +253,7 @@ async def cmd_duel(
     if not config.games_enabled:
         await message.reply("Игры сейчас выключены.")
         return
-    reply = message.reply_to_message
+    reply = replied_message(message)
     if reply is None or reply.from_user is None:
         await message.reply(
             "⚔️ Дуэль объявляется ответом на сообщение соперника: <b>«дуэль 10»</b>"
@@ -322,7 +326,8 @@ async def cmd_accept(message: Message, db: Database, config: Config) -> None:
     await db.expire_old_duels(message.chat.id, now, config.duel_ttl)
     duel = await db.pending_duel_for_target(message.chat.id, user.id)
     if duel is None:
-        return  # обычное слово «принять» без вызова — молчим
+        # обычное слово «принять» без вызова: пусть идёт в статистику/питомцу
+        raise SkipHandler()
     amount = duel["amount"]
     challenger_id = duel["challenger_id"]
 
@@ -357,7 +362,7 @@ async def cmd_decline(message: Message, db: Database, config: Config) -> None:
     await db.expire_old_duels(message.chat.id, now, config.duel_ttl)
     duel = await db.pending_duel_for_target(message.chat.id, user.id)
     if duel is None:
-        return
+        raise SkipHandler()
     await db.set_duel_status(duel["id"], "declined", now)
     await message.reply("🕊 Дуэль отклонена — ириски целы.")
 
@@ -371,7 +376,7 @@ async def cmd_cancel_duel(message: Message, db: Database, config: Config) -> Non
     await db.expire_old_duels(message.chat.id, now, config.duel_ttl)
     duel = await db.pending_duel_by_challenger(message.chat.id, user.id)
     if duel is None:
-        return
+        raise SkipHandler()
     await db.set_duel_status(duel["id"], "cancelled", now)
     await message.reply("Дуэль отменена.")
 

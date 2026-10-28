@@ -805,7 +805,7 @@ async def on_event(callback: CallbackQuery, db: Database, config: Config) -> Non
     if status in ("gone", "again"):
         if paid:
             await db.adjust_balance(chat_id, user.id, CURE_PRICE,
-                                    "питомец: возврат за лекарство", None)
+                                    "питомец: возврат за лекарство", None, earned=0)
         await callback.answer("Уже нажато 🙂" if status == "again" else "Событие закончилось")
         return
 

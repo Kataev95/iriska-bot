@@ -16,7 +16,7 @@ from aiogram.types import Message
 
 from config import Config
 from db import Database
-from handlers.common import GroupF, build_profile, mention
+from handlers.common import GroupF, build_profile, mention, replied_message
 from texts import display_name, fmt, iriski
 
 MAX_AMOUNT = 1_000_000
@@ -44,7 +44,7 @@ async def _resolve_target(message: Message, db: Database, args: list[str]):
     Возвращает (строка users | None, оставшиеся args, текст ошибки | None).
     """
     chat_id = message.chat.id
-    reply = message.reply_to_message
+    reply = replied_message(message)
     if reply and reply.from_user and not reply.from_user.is_bot:
         target = reply.from_user
         await db.ensure_user(chat_id, target.id, target.username, target.first_name)

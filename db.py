@@ -516,9 +516,12 @@ class Database:
 
     async def adjust_balance(
         self, chat_id: int, user_id: int, amount: int,
-        reason: str, admin_id: int | None,
+        reason: str, admin_id: int | None, earned: int | None = None,
     ) -> tuple[str, int]:
         """Изменяет баланс на amount (может быть отрицательным).
+
+        earned — сколько добавить к «всего заработано» (по умолчанию весь
+        плюс). Возвраты ставок и покупок передают 0, чтобы не раздувать стату.
 
         Возвращает (статус, баланс):
         - ("ok", новый баланс)
@@ -540,7 +543,8 @@ class Database:
             await db.execute(
                 "UPDATE users SET balance = ?, earned_total = earned_total + ? "
                 "WHERE chat_id = ? AND user_id = ?",
-                (new_balance, max(amount, 0), chat_id, user_id),
+                (new_balance, max(amount if earned is None else earned, 0),
+                 chat_id, user_id),
             )
             await db.execute(
                 "INSERT INTO ledger (chat_id, user_id, amount, reason, admin_id) "
