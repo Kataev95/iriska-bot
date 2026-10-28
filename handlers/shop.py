@@ -166,9 +166,9 @@ async def notify_admins(
         f"💬 Чат: <b>{chat_name}</b>",
         f"💰 Остаток у покупателя: <b>{fmt(balance)}</b> {iriski(balance)}",
         "",
-        f"✍️ Напиши покупателю в чате, потом закрой заказ: "
-        f"/order_done {order_id}",
-        "📋 Все заказы чата: /orders",
+        f"✍️ Напиши покупателю, потом закрой заказ командой "
+        f"/order_done {order_id} — в том чате, не здесь",
+        "📋 Все заказы чата: /orders (тоже в чате)",
     ])
     for admin_id in config.admin_ids:
         try:
@@ -302,18 +302,19 @@ async def on_shop_callback(
         await callback.answer("Недостаточно ирисок", show_alert=True)
         return
 
+    _last_purchase[key] = now  # сразу: второе быстрое нажатие не создаст дубль
     status, new_balance, order_id = await db.create_order(
         message.chat.id, user.id, user.username, user.first_name,
         item.code, item.title, item.price,
     )
     if status != "ok" or order_id is None:
+        _last_purchase.pop(key, None)
         # Баланс мог измениться, пока человек думал над подтверждением.
         current = new_balance if status == "insufficient" else balance
         await _safe_edit(message, shortage_text(item, current), back_keyboard())
         await callback.answer("Недостаточно ирисок", show_alert=True)
         return
 
-    _last_purchase[key] = now
     receipt = receipt_text(
         item, order_id, new_balance,
         display_name(user.first_name, user.username),
