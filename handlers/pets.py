@@ -90,7 +90,20 @@ def rules_text(config: Config) -> str:
         lines.append("🎁 Награды каждому за серию: " + ", ".join(parts))
     lines.extend([
         "",
-        "Команды: «мои питомцы», «топ питомцев», «назвать питомца Барсик», "
+        "🐾 <b>Уход</b>: в карточке питомца («мой питомец») есть кнопки "
+        "🍖 покормить, 🎾 поиграть, 🛏 уложить. Сытость, настроение и энергия "
+        "падают со временем, а ночью питомец спит. Переписка пары тоже кормит.",
+        "🛒 <b>Магазин</b>: угощения, аксессуары 🎀🕶🌸🧣🎩, 🧊 заморозка серии "
+        "(спасает при пропуске дня) и 🏠 домик.",
+    ])
+    if config.pet_events_per_day > 0:
+        lines.append(
+            "🎲 <b>События</b>: пару раз в день с питомцем что-то случается — "
+            "монетка, посылка, бабочка, простуда. Успейте нажать!"
+        )
+    lines.extend([
+        "",
+        "Команды: «мой питомец», «топ питомцев», «назвать питомца Барсик», "
         "«бросить питомца» (ответом партнёру, если питомцев несколько).",
     ])
     return "\n".join(lines)
@@ -303,21 +316,13 @@ async def on_pet_callback(callback: CallbackQuery, db: Database, config: Config)
 
 # ---------- список, топ, правила ----------
 
-@router.message(GroupF, Command("pets"))
-@router.message(GroupF, trig(LIST_TRIGGERS))
 async def cmd_my_pets(message: Message, db: Database, config: Config) -> None:
-    user = message.from_user
-    if user is None or not config.pets_enabled:
+    """Карточка питомца с фото и кнопками (сами триггеры — в handlers/pet_menu.py)."""
+    if message.from_user is None or not config.pets_enabled:
         return
-    pets = await db.user_pets(message.chat.id, user.id)
-    if not pets:
-        await message.reply(rules_text(config))
-        return
-    ids = sorted({p["user_a"] for p in pets} | {p["user_b"] for p in pets})
-    names = await db.user_names(message.chat.id, ids)
-    today = today_day(config)
-    cards = [pet_card(p, user.id, names, config, today) for p in pets]
-    await message.reply("🐾 <b>Твои питомцы</b>\n\n" + "\n\n".join(cards))
+    from handlers.pet_menu import send_card  # без циклического импорта
+
+    await send_card(message, db, config)
 
 
 @router.message(GroupF, Command("pettop"))
@@ -471,12 +476,39 @@ async def track_pet_message(message: Message, db: Database, config: Config) -> N
         event = await db.record_pet_message(
             message.chat.id, user.id, partner, today, yesterday, rewards
         )
-        if not event or not event["fed"] or not config.pet_feed_notice:
+        if not event:
+            continue
+        from handlers.pet_menu import chat_feeds_pet, send_pet_photo
+
+        try:
+            await chat_feeds_pet(db, event.get("pet"), config)
+        except Exception as e:
+            logger.warning("Не смог покормить питомца перепиской: %s", e)
+        if not event["fed"] or not config.pet_feed_notice:
             continue
         try:
-            await message.reply(await fed_text(db, event))
+            text = await fed_text(db, event)
+            key = fed_photo_key(event)
+            if key:
+                await send_pet_photo(message.bot, db, message.chat.id, key, text,
+                                     reply_to=message.message_id)
+            else:
+                await message.reply(text)
         except Exception as e:  # не мешаем подсчёту из-за сбоя отправки
             logger.warning("Не смог сообщить о питомце: %s", e)
+
+
+def fed_photo_key(event: dict) -> str | None:
+    """Фото — только в особые моменты: вылупился или подрос."""
+    pet = event["pet"]
+    streak = int(event["streak"])
+    sp = species_by_code(pet["species"]).code
+    if int(event["prev_best"]) <= 0:
+        return f"{sp}_baby"
+    stage = stage_for(streak)
+    if stage is not None and stage.min_streak == streak and streak > 1:
+        return f"{sp}_{stage.code}"
+    return None
 
 
 async def fed_text(db: Database, event: dict) -> str:
@@ -520,8 +552,26 @@ async def process_pet_day(
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    lost = await db.sweep_lost_pets(yesterday, now.timestamp())
+    frozen = await db.use_pet_freezes(yesterday)
     by_chat: dict[int, list] = {}
+    for pet in frozen:
+        by_chat.setdefault(int(pet["chat_id"]), []).append(pet)
+    for chat_id, pets in by_chat.items():
+        ids = sorted({p["user_a"] for p in pets} | {p["user_b"] for p in pets})
+        names = await db.user_names(chat_id, ids)
+        lines = ["🧊 <b>Заморозка спасла серию!</b>", ""]
+        for p in pets:
+            n = int(p["streak"])
+            lines.append(
+                f"{pet_title(p)} — {_who(names, p['user_a'])} и "
+                f"{_who(names, p['user_b'])} вчера не переписывались, но серия "
+                f"🔥 {n} {days(n)} цела. Заморозок осталось: {int(p['freezes'])}."
+            )
+        lines.append("Сегодня напишите друг другу обязательно!")
+        await _send(bot, chat_id, "\n".join(lines))
+
+    lost = await db.sweep_lost_pets(yesterday, now.timestamp())
+    by_chat = {}
     for pet in lost:
         by_chat.setdefault(int(pet["chat_id"]), []).append(pet)
     for chat_id, pets in by_chat.items():
@@ -545,7 +595,9 @@ async def process_pet_day(
                 f"🩹 Вернуть серию можно {price} в течение "
                 f"{config.pet_restore_hours:g} ч: ответьте партнёру «вернуть питомца».",
             ])
-        await _send(bot, chat_id, "\n".join(lines))
+        from handlers.pet_menu import send_pet_photo
+
+        await send_pet_photo(bot, db, chat_id, "runaway", "\n".join(lines))
 
     reminded = 0
     if 0 <= config.pet_remind_hour <= 23 and now.hour >= config.pet_remind_hour:
