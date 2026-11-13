@@ -7,6 +7,8 @@ the existing trip frequency limit. No passive coins/XP or timers.
 """
 from dataclasses import dataclass
 
+from pet_inventory import loot_for
+
 
 @dataclass(frozen=True)
 class Room:
@@ -70,3 +72,10 @@ def extra_loot(route: str, workshop_level: int) -> dict[str, int]:
     if workshop_level >= 2 and route == "ruins":
         result["stone"] = 1
     return result
+
+def route_loot(route: str, workshop_level: int) -> dict[str, int]:
+    """One reward algorithm shared by claim handler and Mini App previews."""
+    loot = loot_for(route)
+    for material, amount in extra_loot(route, workshop_level).items():
+        loot[material] = loot.get(material, 0) + amount
+    return loot

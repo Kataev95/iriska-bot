@@ -17,7 +17,7 @@ from pet_care import (
 )
 from pet_game import DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS, legacy_xp, level_for
 from pet_inventory import MATERIALS, RECIPES, loot_for, loot_summary
-from pet_home import MAX_ROOM_LEVEL, ROOMS, extra_loot, room_effect
+from pet_home import MAX_ROOM_LEVEL, ROOMS, room_effect, route_loot
 
 
 class PetGameDatabase:
@@ -399,19 +399,16 @@ class PetGameDatabase:
             )
             # ONE transaction covers trip closure, XP, coins and materials.
             # A second claim sees claimed_at and never enters this section.
-            loot = loot_for(trip["route"])
-            if pet["house"]:
-                workshop = await (
-                    await db.execute(
-                        "SELECT level FROM pet_house_rooms "
-                        "WHERE pet_id=? AND room='workshop'",
-                        (pet_id,),
-                    )
-                ).fetchone()
-                for material, amount in extra_loot(
-                    trip["route"], int(workshop["level"]) if workshop else 0
-                ).items():
-                    loot[material] = loot.get(material, 0) + amount
+            workshop = await (
+                await db.execute(
+                    "SELECT level FROM pet_house_rooms "
+                    "WHERE pet_id=? AND room='workshop'",
+                    (pet_id,),
+                )
+            ).fetchone() if pet["house"] else None
+            loot = route_loot(
+                trip["route"], int(workshop["level"]) if workshop else 0
+            )
             for material, quantity in loot.items():
                 await db.execute(
                     "INSERT INTO pet_material_drops(trip_id,material,quantity) "
