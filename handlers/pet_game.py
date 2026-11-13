@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from html import escape
 
+from rich_ui import answer_rich
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
@@ -159,7 +160,7 @@ async def on_game(callback: CallbackQuery, db: Database, config: Config):
     text = "\n".join(lines)
     try:
         if callback.message.photo:
-            await callback.message.answer(text, reply_markup=markup)
+            await answer_rich(callback.message, text, reply_markup=markup)
         else:
             await callback.message.edit_text(text, reply_markup=markup)
     except TelegramBadRequest as exc:

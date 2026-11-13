@@ -19,6 +19,7 @@ import secrets
 import time
 from datetime import datetime
 
+from rich_ui import reply_rich, send_rich
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
@@ -163,7 +164,7 @@ async def send_pet_photo(
                 logger.warning("Фото %s не ушло: %s", key, e)
                 break
     try:
-        return await bot.send_message(
+        return await send_rich(bot, 
             chat_id, caption, reply_markup=markup, reply_parameters=reply
         )
     except Exception as e:
@@ -381,7 +382,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         if pet is None and pets:
             pet = pets[0]
     if pet is None:
-        await message.reply(rules_text(config))
+        await reply_rich(message, rules_text(config))
         return
     pet = await refresh_care(db, pet, config, local_now(config).timestamp())
     names = await _names(db, pet)

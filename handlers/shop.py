@@ -14,6 +14,7 @@ import logging
 import time
 from html import escape
 
+from rich_ui import reply_rich, send_rich
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
@@ -172,7 +173,7 @@ async def notify_admins(
     ])
     for admin_id in config.admin_ids:
         try:
-            await bot.send_message(admin_id, text)
+            await send_rich(bot, admin_id, text)
         except Exception as exc:  # админ не начинал диалог с ботом и т.п.
             logger.warning(
                 "Не смог сообщить админу %s о заказе №%s: %s",
@@ -206,12 +207,12 @@ async def cmd_shop(message: Message, db: Database, config: Config) -> None:
     if user is None or user.is_bot:
         return
     if not config.shop_enabled:
-        await message.reply("🛍 Магазин сейчас закрыт — заходи позже.")
+        await reply_rich(message, "🛍 Магазин сейчас закрыт — заходи позже.")
         return
     row = await db.get_user(message.chat.id, user.id)
     balance = int(row["balance"]) if row else 0
     items = catalog(config.shop_prices)
-    await message.reply(
+    await reply_rich(message, 
         shop_text(items, balance, config.shop_contact),
         reply_markup=catalog_keyboard(items),
     )
@@ -225,21 +226,21 @@ async def cmd_buy(
     if user is None or user.is_bot:
         return
     if not config.shop_enabled:
-        await message.reply("🛍 Магазин сейчас закрыт — заходи позже.")
+        await reply_rich(message, "🛍 Магазин сейчас закрыт — заходи позже.")
         return
     items = catalog(config.shop_prices)
     raw = (command.args or "").strip().split()
     item = find_item(items, raw[0]) if raw else None
     if item is None:
         hint = ", ".join(f"/buy {i.code}" for i in items[:3])
-        await message.reply(
+        await reply_rich(message, 
             "Не знаю такого товара 🤔\n"
             f"Смотри каталог: /shop — например {hint}…"
         )
         return
     row = await db.get_user(message.chat.id, user.id)
     balance = int(row["balance"]) if row else 0
-    await message.reply(
+    await reply_rich(message, 
         confirm_text(item, balance, config.shop_contact),
         reply_markup=confirm_keyboard(item, balance),
     )
@@ -324,7 +325,7 @@ async def on_shop_callback(
         # Сообщение не отредактировалось — покупатель всё равно должен
         # получить чек с номером заказа.
         try:
-            await message.reply(receipt, reply_markup=back_keyboard())
+            await reply_rich(message, receipt, reply_markup=back_keyboard())
         except Exception:
             logger.exception("Не смог отправить чек по заказу №%s", order_id)
     await callback.answer(f"Куплено! Заказ №{order_id}")

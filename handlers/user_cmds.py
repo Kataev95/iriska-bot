@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from rich_ui import reply_rich
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandStart
@@ -43,11 +44,11 @@ async def cmd_me(message: Message, db: Database, config: Config) -> None:
         return
     row = await db.get_user(message.chat.id, user.id)
     if row is None:
-        await message.reply(
+        await reply_rich(message, 
             "Я тебя ещё не считал 🙈 Напиши пару сообщений в чат и загляни снова."
         )
         return
-    await message.reply(await build_profile(db, config, message.chat.id, row))
+    await reply_rich(message, await build_profile(db, config, message.chat.id, row))
 
 
 @router.message(GroupF, Command("balance"))
@@ -59,7 +60,7 @@ async def cmd_balance(message: Message, db: Database, config: Config) -> None:
     row = await db.get_user(message.chat.id, user.id)
     balance = row["balance"] if row else 0
     shop_line = "\n🛍 Потратить: /shop" if config.shop_enabled else ""
-    await message.reply(
+    await reply_rich(message, 
         f"🍬 Баланс: <b>{fmt(balance)}</b> {iriski(balance)}\n"
         f"Ириски — постоянная игровая валюта бота.{shop_line}"
     )
@@ -70,7 +71,7 @@ async def cmd_balance(message: Message, db: Database, config: Config) -> None:
 async def cmd_top(message: Message, db: Database, config: Config) -> None:
     rows = await db.top_alltime(message.chat.id, 10)
     if not rows:
-        await message.reply("Пока никто ничего не наболтал 😴 Начните общаться!")
+        await reply_rich(message, "Пока никто ничего не наболтал 😴 Начните общаться!")
         return
     totals = await db.chat_totals(message.chat.id)
     lines = ["🏆 <b>Топ чата за текущий месяц</b>", ""]
@@ -85,7 +86,7 @@ async def cmd_top(message: Message, db: Database, config: Config) -> None:
         f"Всего: {fmt(totals['msgs'])} {msgs(totals['msgs'])} от "
         f"{fmt(totals['users'])} участников, заработано 🍬 {fmt(totals['earned'])}"
     )
-    await message.reply("\n".join(lines))
+    await reply_rich(message, "\n".join(lines))
 
 
 @router.message(GroupF, Command("week", "topweek"))
@@ -93,7 +94,7 @@ async def cmd_top(message: Message, db: Database, config: Config) -> None:
 async def cmd_week(message: Message, db: Database, config: Config) -> None:
     rows = await db.top_since(message.chat.id, week_ago_day(config), 10)
     if not rows:
-        await message.reply("За последние 7 дней тишина 😴")
+        await reply_rich(message, "За последние 7 дней тишина 😴")
         return
     lines = ["📅 <b>Топ за последние 7 дней</b>", ""]
     for i, r in enumerate(rows, 1):
@@ -101,7 +102,7 @@ async def cmd_week(message: Message, db: Database, config: Config) -> None:
             f"{place(i)} {display_name(r['first_name'], r['username'])} — "
             f"<b>{fmt(r['cnt'])}</b> {msgs(r['cnt'])}"
         )
-    await message.reply("\n".join(lines))
+    await reply_rich(message, "\n".join(lines))
 
 
 @router.message(GroupF, Command("day", "today"))
@@ -109,7 +110,7 @@ async def cmd_week(message: Message, db: Database, config: Config) -> None:
 async def cmd_day(message: Message, db: Database, config: Config) -> None:
     rows = await db.top_since(message.chat.id, today_day(config), 10)
     if not rows:
-        await message.reply("Сегодня пока тишина 😴 Самое время начать!")
+        await reply_rich(message, "Сегодня пока тишина 😴 Самое время начать!")
         return
     lines = ["☀️ <b>Топ за сегодня</b>", ""]
     for i, r in enumerate(rows, 1):
@@ -117,14 +118,14 @@ async def cmd_day(message: Message, db: Database, config: Config) -> None:
             f"{place(i)} {display_name(r['first_name'], r['username'])} — "
             f"<b>{fmt(r['cnt'])}</b> {msgs(r['cnt'])}"
         )
-    await message.reply("\n".join(lines))
+    await reply_rich(message, "\n".join(lines))
 
 
 @router.message(GroupF, Command("hours"))
 @router.message(GroupF, trig(HOURS_TRIGGERS))
 async def cmd_hours(message: Message, config: Config) -> None:
     if not config.bonus_hours:
-        await message.reply("Бонусные часы сейчас не настроены.")
+        await reply_rich(message, "Бонусные часы сейчас не настроены.")
         return
     mult = max(config.bonus_hours_mult, 1)
     now = datetime.now(config.tz)
@@ -139,7 +140,7 @@ async def cmd_hours(message: Message, config: Config) -> None:
         "\nО старте бонусного часа бот объявляет в чате."
         if config.announce_bonus_hours else ""
     )
-    await message.reply(
+    await reply_rich(message, 
         f"⏰ <b>Бонусные часы</b> — прогресс к ирискам х{mult}:\n"
         f"{windows_text(config.bonus_hours)} ({tz_label})\n\n{status}{announce_note}"
     )
@@ -166,7 +167,7 @@ async def cmd_help(message: Message, config: Config) -> None:
                 f"{config.bonus_abuse_block_days:g} дн.)"
             )
         bonus_watch += "\n"
-    await message.reply(
+    await reply_rich(message, 
         help_text(
             per=config.messages_per_iriska,
             min_len=config.min_msg_len,
@@ -184,7 +185,7 @@ async def cmd_help(message: Message, config: Config) -> None:
 
 @router.message(CommandStart(), F.chat.type == ChatType.PRIVATE)
 async def cmd_start(message: Message, config: Config) -> None:
-    await message.reply(
+    await reply_rich(message, 
         "Привет! Я — Ириска-бот 🍬\n"
         "Считаю сообщения в чате и начисляю ириски за активность.\n\n"
         "Добавь меня в группу — и статистика начнёт копиться.\n"
@@ -206,5 +207,5 @@ async def cmd_id(message: Message) -> None:
             f"ID автора сообщения ({display_name(target.first_name, target.username)}): "
             f"<code>{target.id}</code>"
         )
-    await message.reply("\n".join(lines))
+    await reply_rich(message, "\n".join(lines))
 
