@@ -1,0 +1,55 @@
+/* PETS WORLD 1.8 — seasons and cosmetic title collection */
+.season-hero{background:linear-gradient(145deg,#3b386f,#273a60 63%,#275f5a);
+ border:1px solid #b09cf050;text-align:center;overflow:hidden;position:relative;}
+.season-stars{font-size:42px;letter-spacing:7px;padding:8px 0 3px;
+ filter:drop-shadow(0 8px 14px #020b2675);}
+.season-heading{font-size:24px;font-weight:900;letter-spacing:-.5px;margin:6px 0 10px;}
+.season-hero-stats{display:flex;justify-content:space-around;flex-wrap:wrap;gap:7px;margin:18px 0;}
+.season-hero-stats>span{border-radius:11px;padding:9px;background:#161c3f8e;font-size:12px;}
+.season-hero-stats b{font-weight:900;color:#a1e5f2;}
+.season-meter{width:100%;height:10px;appearance:none;-webkit-appearance:none;
+ overflow:hidden;border:0;border-radius:10px;background:#121931;}
+.season-meter::-webkit-progress-bar{background:#121931;border-radius:10px;}
+.season-meter::-webkit-progress-value{background:linear-gradient(90deg,#64d5d0,#d5b6ef);
+ border-radius:10px;}
+.season-meter::-moz-progress-bar{background:linear-gradient(90deg,#64d5d0,#d5b6ef);
+ border-radius:10px;}
+.season-tasks{background:linear-gradient(135deg,#282d50,#202b46);}
+.season-challenge{padding:17px 0;border-bottom:1px solid #f7faff1b;}
+.season-challenge:last-child{border-bottom:0;}
+.season-challenge-top{display:flex;align-items:center;gap:12px;}
+.season-challenge-icon{font-size:25px;width:46px;height:46px;border-radius:15px;
+ flex-shrink:0;display:grid;place-items:center;background:#3b436a;}
+.season-challenge.ready .season-challenge-icon{background:#316564;}
+.season-challenge.claimed .season-challenge-icon{background:#4d567c;}
+.season-challenge-text{min-width:0;flex:1;}
+.season-challenge-text strong{display:block;font-size:14px;}
+.season-challenge-text small{display:block;font-size:11px;line-height:1.4;
+ color:#b5c6df;margin-top:5px;}
+.season-progress-row{display:flex;align-items:center;gap:10px;margin-top:12px;}
+.season-progress-row b{font-size:11px;min-width:47px;text-align:right;}
+.season-prize{font-size:11px;color:#d8d3f6;margin:10px 0;}
+.season-challenge .btn{font-size:13px;}
+.season-collection{background:linear-gradient(135deg,#302c50,#283d53);}
+.season-title-item{border-bottom:1px solid #ffffff1a;padding:12px 2px;
+ display:flex;align-items:center;gap:10px;}
+.season-title-item:last-of-type{border-bottom:0;}
+.season-title-item.equipped{background:#1e705449;border-radius:12px;padding:12px 8px;}
+.season-title-item>div{flex:1;min-width:0;}
+.season-title-item strong{display:block;font-size:13px;}
+.season-title-item small{display:block;font-size:11px;color:#b4c1db;margin-top:4px;}
+.season-title-item .btn{flex-shrink:0;font-size:12px;padding:10px;}
+.season-leaderboard{background:linear-gradient(135deg,#292c4d,#213d49);}
+.season-leader{display:flex;align-items:center;gap:9px;border-bottom:1px solid #ffffff15;
+ padding:12px 3px;}
+.season-leader:last-of-type{border-bottom:0;}
+.season-leader.mine{background:#26695752;border-radius:12px;padding:12px 8px;}
+.season-leader>span{min-width:47px;font-size:13px;}
+.season-leader>div{flex:1;min-width:0;}
+.season-leader strong{display:block;font-size:13px;word-break:break-word;}
+.season-leader small{display:block;font-size:10px;color:#b1c6d7;margin-top:4px;}
+.season-leader>b{font-size:13px;color:#7ce4d7;white-space:nowrap;}
+.season-loading{text-align:center;padding:28px 13px;}
+.season-loading .spinner{margin:0 auto;}
+.season-link{background:linear-gradient(120deg,#4b386e,#2e5962);}
+.season-name-tag{margin:8px 0 2px;display:inline-block;white-space:normal;}
