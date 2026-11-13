@@ -2,7 +2,7 @@ name: iriska bot tests
 
 on:
   push:
-    branches: [main, feature/pets3-atomic-events-rich-hud]
+    branches: [main, feature/pets-hud-mobile-navigation]
   pull_request:
 
 jobs:
@@ -29,4 +29,6 @@ jobs:
           python test_pet_game.py
           python test_pet_event_atomic.py
       - name: Native Rich Message smoke tests
-        run: python test_rich_ui.py
+        run: |
+          python test_rich_ui.py
+          python test_pet_hud.py
