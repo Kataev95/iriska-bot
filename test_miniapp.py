@@ -144,6 +144,40 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status, 200)
         self.assertEqual((await r.json())["pet"]["balance"], 15)
 
+    async def test_live_cooldowns_trip_limit_and_level_progress(self):
+        r = await self.client.get("/api/pet/1", headers=self.headers)
+        self.assertEqual(r.status, 200)
+        pet = await r.json()
+        self.assertEqual(pet["level_start_xp"], 0)
+        self.assertEqual(pet["next_xp"], 50)
+        self.assertEqual(pet["trips_remaining"], 3)
+        self.assertTrue(pet["mood"])
+        self.assertEqual(pet["care_state"]["feed"]["ready_at"], 0)
+
+        # A completed care action generates a server-backed cooldown.
+        r = await self.client.post("/api/action", headers=self.headers,
+            json={"pet_id": 1, "kind": "care", "code": "feed"})
+        self.assertEqual(r.status, 200)
+        after = (await r.json())["pet"]
+        self.assertGreater(after["care_state"]["feed"]["ready_at"], after["server_time"])
+        self.assertLessEqual(after["care_state"]["feed"]["ready_at"] - after["server_time"], 7201)
+
+        # Existing server-side validation still rejects immediate repeats.
+        r = await self.client.post("/api/action", headers=self.headers,
+            json={"pet_id": 1, "kind": "care", "code": "feed"})
+        self.assertEqual(r.status, 200)
+        repeated = (await r.json())["pet"]
+        self.assertEqual(repeated["care_state"]["feed"]["ready_at"],
+                         after["care_state"]["feed"]["ready_at"])
+        self.assertEqual(repeated["balance"], after["balance"])
+
+        r = await self.client.post("/api/action", headers=self.headers,
+            json={"pet_id": 1, "kind": "start", "code": "park"})
+        self.assertEqual(r.status, 200)
+        started = (await r.json())["pet"]
+        self.assertEqual(started["trips_remaining"], 2)
+        self.assertIsNotNone(started["trip"])
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -173,8 +207,15 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("contentSafeAreaChanged", js)
         self.assertIn("safeAreaChanged", js)
         self.assertIn("syncSafeArea()", js)
-        self.assertIn("/static/style.css?v=2", html)
-        self.assertIn("/static/app.js?v=2", html)
+        self.assertIn('TG?.BackButton?.onClick(goBack)', js)
+        self.assertIn('TG?.onEvent?.("activated"', js)
+        self.assertIn('++ui.syncSerial', js)
+        self.assertIn('data-trip-countdown', js)
+        self.assertIn('care_state', js)
+        self.assertIn("trips_remaining", js)
+        self.assertIn("syncClock(snapshot)", js)
+        self.assertIn("/static/style.css?v=3", html)
+        self.assertIn("/static/app.js?v=3", html)
 
 
 if __name__ == "__main__":
