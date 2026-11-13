@@ -272,7 +272,7 @@ async def action(request: web.Request):
     elif kind == "craft" and code in RECIPES:
         result = await db.craft_trophy(pet_id, uid, code, now)
     elif kind == "build_room" and code in ROOMS:
-        result = await db.build_room(pet_id, uid, code, now)
+        result = await db.build_room(pet_id, uid, code, now, int(payload["expected_level"]))
     elif kind == "room_use" and room_effect(code, 1):
         result = await db.use_room(pet_id, uid, code, now, cfg.tz)
     else:

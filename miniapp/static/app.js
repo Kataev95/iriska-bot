@@ -561,7 +561,8 @@ document.addEventListener("click", async e=>{
         }).join(', ');
         confirmDialog('Улучшить '+room.name+'?',
           'Общие материалы будут потрачены: '+costText+'. Улучшение для двоих.',
-          ()=>perform("build_room",room.code));
+          ()=>perform("build_room",room.code,
+            {expected_level:Number(ui.pet.house_rooms?.[room.code]||0)}));
       }
     }
     return;

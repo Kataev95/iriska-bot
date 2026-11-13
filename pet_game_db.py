@@ -448,7 +448,7 @@ class PetGameDatabase:
             [row["room"] for row in used],
         )
 
-    async def build_room(self, pet_id, user_id, code, now):
+    async def build_room(self, pet_id, user_id, code, now, expected_level):
         """Spend shared materials exactly once to build or upgrade a room."""
         definition = ROOMS.get(code)
         if definition is None:
@@ -466,6 +466,10 @@ class PetGameDatabase:
                 )
             ).fetchone()
             level = int(current["level"]) if current else 0
+            # A stale tap must NOT buy the next tier automatically.
+            # Compare while holding the write lock, before any deductions.
+            if level != expected_level:
+                return "Уровень комнаты изменился. Обновите домик и попробуйте снова"
             if level >= MAX_ROOM_LEVEL:
                 return "Эта комната уже полностью улучшена"
             costs = definition.upgrades[level]
