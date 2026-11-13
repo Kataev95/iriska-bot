@@ -24,8 +24,11 @@ def validate_init_data(raw: str, token: str, *, now: float | None = None,
         if len(pairs) != len(data):
             raise Unauthorized("Повторяющиеся поля авторизации")
         given_hash = data.pop("hash")
-        # Telegram's recent third-party signature is separate from the Bot token HMAC.
-        data.pop("signature", None)
+        # For bot-token HMAC Telegram signs EVERY received field except hash,
+        # including the optional "signature" field (Ed25519 third-party proof).
+        # Excluding signature here caused "Неверная подпись Telegram" in
+        # Telegram clients that send both hash and signature.
+        # Only Ed25519 third-party validation excludes BOTH hash and signature.
         check = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
         secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
         expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()

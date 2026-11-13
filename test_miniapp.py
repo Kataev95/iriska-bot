@@ -47,6 +47,24 @@ class InitDataTests(unittest.TestCase):
         with self.assertRaises(Unauthorized):
             validate_init_data(raw + "&auth_date=1", TOKEN)
 
+    def test_real_telegram_style_initdata_including_signature(self):
+        # Recent Telegram apps include an extra Ed25519 "signature".
+        # Bot-token hash MUST cover that field; other fields unchanged.
+        raw = signed(101, signature="TelegramEd25519SampleBase64url-_",
+                     query_id="AA123456", chat_type="supergroup")
+        validated = validate_init_data(raw, TOKEN)
+        self.assertEqual(validated["user_id"], 101)
+
+        # Do not accept removing/replacing a field that was HMAC signed.
+        with self.assertRaises(Unauthorized):
+            validate_init_data(raw.replace("signature=", "signature=modified"))
+        with self.assertRaises(Unauthorized):
+            validate_init_data(raw.replace("&signature=TelegramEd25519SampleBase64url-_", ""))
+
+        # Both old (no signature) and new (with signature) Telegram
+        # client versions must work. The unsigned tokens stay invalid.
+        self.assertEqual(validate_init_data(signed(101), TOKEN)["user_id"], 101)
+
     def test_links(self):
         self.assertEqual(main_app_link("IriskaBot", 25),
                          "https://t.me/IriskaBot?startapp=p_25")
@@ -74,7 +92,10 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.config = SimpleNamespace(bot_token=TOKEN, tz=ZoneInfo("Europe/Moscow"))
         self.client = TestClient(TestServer(create_app(self.db, self.config)))
         await self.client.start_server()
-        self.headers = {"X-Telegram-Init-Data": signed(101)}
+        # Actual Telegram clients may provide both hash and signature.
+        self.headers = {
+            "X-Telegram-Init-Data": signed(101, signature="ProductionTelegramEd25519_signature")
+        }
 
     async def asyncTearDown(self):
         await self.client.close()
