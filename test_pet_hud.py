@@ -46,7 +46,7 @@ class HUDTests(unittest.TestCase):
         self.pet = specimen()
         self.cfg = SimpleNamespace(tz=ZoneInfo("Europe/Moscow"))
 
-    def test_main_is_compact_without_enormous_image_or_table(self):
+    def test_main_is_compact_and_photo_is_not_a_separate_button(self):
         html = rich_pet_html(self.pet, {}, self.cfg)
         self.assertIn("Барсик", html)
         self.assertIn("1 день", html)
@@ -59,7 +59,7 @@ class HUDTests(unittest.TestCase):
     def test_profession_is_in_development_not_adventures(self):
         primary = callbacks(main_keyboard(self.pet, self.cfg, False))
         self.assertIn("pg:progress:9", primary)
-        self.assertIn("pm:photo:9", primary)
+        self.assertNotIn("pm:photo:9", primary)
         self.assertNotIn("pg:professions:9", primary)
         adv = callbacks(game_keyboard(self.pet, "menu", 0))
         self.assertNotIn("pg:professions:9", adv)
