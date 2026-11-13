@@ -68,7 +68,7 @@ from pet_care import (
     stats_lines,
     worn_line,
 )
-from pet_game import growth_days, level_for, next_level_xp
+from pet_game import PROFESSIONS, growth_days, level_for, next_level_xp
 from pets import next_stage, pet_name, pet_title, species_by_code, stage_line
 from texts import days, fmt, iriski
 
@@ -138,23 +138,25 @@ async def _remember(db: Database, key: str, msg) -> None:
 async def send_pet_photo(
     bot: Bot, db: Database, chat_id: int, key: str, caption: str,
     reply_to: int | None = None, markup: InlineKeyboardMarkup | None = None,
-    rich_html: str | None = None,
+    rich_html: str | None = None, show_image: bool = True,
 ) -> Message | None:
     """Фото питомца с подписью; если картинки нет или подпись длинная — текстом."""
     reply = (
         ReplyParameters(message_id=reply_to, allow_sending_without_reply=True)
         if reply_to else None
     )
-    # Test-mode/legacy-mode keeps the existing photo card (no UI migration).
+    # In native Rich mode omit the giant artwork from the main HUD.
+    # Event notifications and the dedicated photo screen may still show art.
     if os.environ.get("RICH_MESSAGES_ENABLED", "1") != "0":
         try:
             return await send_rich(
                 bot, chat_id, caption, html=rich_html,
-                image_url=asset_url(key), reply_to_message_id=reply_to,
+                image_url=asset_url(key) if show_image else None,
+                reply_to_message_id=reply_to,
                 reply_markup=markup, fallback=False,
             )
         except (TelegramBadRequest, TelegramNotFound) as exc:
-            logger.info("Rich pet image unsupported, use legacy photo: %s", exc)
+            logger.info("Rich HUD unsupported, use legacy photo: %s", exc)
     media, from_disk = await _media(db, key)
     if media is not None and len(caption) <= 1024:
         for _ in range(2):
@@ -190,11 +192,13 @@ async def send_pet_photo(
 async def _edit_card(
     message: Message, db: Database, key: str, caption: str,
     markup: InlineKeyboardMarkup | None, rich_html: str | None = None,
+    show_image: bool = False,
 ) -> None:
     """Update a rich HUD in-place; legacy photo cards retain the old path."""
     if not message.photo:
         if await edit_rich(
-            message, caption, html=rich_html, image_url=asset_url(key),
+            message, caption, html=rich_html,
+            image_url=asset_url(key) if show_image else None,
             reply_markup=markup,
         ):
             return
@@ -224,85 +228,185 @@ async def _edit_card(
 
 
 def rich_pet_html(pet, names: dict, config: Config, note: str | None = None) -> str:
-    """Rich 3.0 HUD: structured growth, health bars and today's team goal."""
+    """Compact mobile-first HUD: core information fits before the keyboard."""
     from html import escape
 
-    streak, best = int(pet["streak"]), int(pet["best_streak"])
+    best, streak = int(pet["best_streak"]), int(pet["streak"])
     today = local_now(config).strftime("%Y-%m-%d")
-    lines = [
-        f"<h2>{pet_title(pet)}</h2>",
-        f"<p>👫 {_plain(names, pet['user_a'])} и {_plain(names, pet['user_b'])}</p>",
-        "<hr/>",
-    ]
+    doc = [f"<h2>🐾 {pet_title(pet)}</h2>"]
     if best <= 0:
-        lines.append("<h3>🥚 Яйцо</h3>")
-        lines.append("<p>Напишите друг другу сегодня, чтобы питомец вылупился!</p>")
+        doc.append("<p>🥚 Яйцо ждёт переписки двух хозяев.</p>")
     else:
         xp = int(pet["xp"])
         level = level_for(xp)
-        target = next_level_xp(xp)
-        lines.extend([
-            "<h3>⭐ Развитие</h3>",
-            rich_table(
-                ["Показатель", "Значение"],
-                [
-                    ["Уровень", f"{level}/20"],
-                    ["Опыт", f"{xp} XP"],
-                    ["До уровня", f"{target - xp} XP" if target else "Максимум 🏆"],
-                    ["Серия", f"{streak} дней"],
-                    ["Лучший результат", f"{best} дней"],
-                    ["Стадия", stage_line(growth_days(pet))],
-                ],
-            ),
-            "<h3>❤️ Состояние</h3>",
-            rich_table(
-                ["🍖 Сытость", "😊 Радость", "⚡ Энергия"],
-                [[f"{int(pet['food'])}%", f"{int(pet['joy'])}%",
-                  f"{int(pet['energy'])}%"]],
-            ),
-            f"<p>{escape(mood_text(pet['food'], pet['joy'], pet['energy'], local_now(config).hour))}</p>",
-            "<h3>🤝 Совместное задание</h3>",
+        next_xp = next_level_xp(xp)
+        progress = "🏆 Макс." if next_xp is None else f"до следующего {next_xp-xp} XP"
+        doc.extend([
+            f"<p>⭐ <b>Уровень {level}/20</b> · {xp} XP · {progress}</p>",
+            f"<p>🍖 {int(pet['food'])}%   😊 {int(pet['joy'])}%   ⚡ {int(pet['energy'])}%</p>",
+            f"<p>🔥 <b>{streak} {days(streak)}</b> · {stage_line(growth_days(pet))}</p>",
         ])
         if pet["last_fed_day"] == today:
-            lines.append("<p>✅ На сегодня общение засчитано!</p>")
+            doc.append("<p>✅ Сегодня вы позаботились друг о друге.</p>")
         else:
             waiting = [
                 _plain(names, uid)
                 for uid, side in ((pet["user_a"], "a_day"), (pet["user_b"], "b_day"))
                 if pet[side] != today
             ]
-            lines.append("<p>⏳ Ожидаем: " + ", ".join(waiting) + "</p>")
+            doc.append("<p>⏳ Ждём общения: " + ", ".join(waiting) + "</p>")
+        if pet["profession"]:
+            profession = PROFESSIONS.get(pet["profession"])
+            if profession:
+                doc.append(f"<p>🎓 {escape(profession[0])}</p>")
+        doc.append(
+            f"<footer>{escape(mood_text(pet['food'], pet['joy'], pet['energy'], local_now(config).hour))}</footer>"
+        )
         extras = []
-        if int(pet["freezes"]):
-            extras.append(f"🧊 Заморозки: {int(pet['freezes'])}")
         if int(pet["house"]):
             extras.append("🏠 Домик")
+        if int(pet["freezes"]):
+            extras.append(f"🧊 {int(pet['freezes'])}")
         if extras:
-            lines.append("<footer>" + " · ".join(extras) + "</footer>")
+            doc.append("<footer>" + " · ".join(extras) + "</footer>")
     if note:
-        lines.append(f"<blockquote>{escape(note)}</blockquote>")
-    lines.append("<footer>Питомцы 3.0 · Всё управление через кнопки ниже</footer>")
-    return "".join(lines)
+        doc.append(f"<blockquote>{escape(note)}</blockquote>")
+    doc.append("<footer>Уход, развитие и приключения — кнопками ниже.</footer>")
+    return "".join(doc)
+
+
+def rich_pet_photo_html(pet, names: dict) -> str:
+    """Large artwork appears only after pressing 'Фото', not in every menu."""
+    from html import escape
+    return (
+        f"<h2>📸 {pet_title(pet)}</h2>"
+        f"<p>👫 {_plain(names, pet['user_a'])} и {_plain(names, pet['user_b'])}</p>"
+        f"<footer>Можно вернуться к управлению питомцем одной кнопкой.</footer>"
+    )
+
+
+SHOP_GROUPS = {
+    "food": ("🍪 Еда", "Корм и угощения"),
+    "wear": ("🎀 Аксессуары", "Стиль питомца"),
+    "upgrade": ("🏠 Улучшения", "Домик и заморозки"),
+}
+
+
+def shop_group_for(item) -> str:
+    return item.kind if item.kind in ("food", "wear") else "upgrade"
+
+
+def shop_items(group: str):
+    return [item for item in SHOP if shop_group_for(item) == group]
+
+
+def shop_caption(pet, balance: int, note: str | None = None) -> str:
+    lines = [
+        f"🛒 <b>Магазин · {pet_title(pet)}</b>",
+        f"🍬 Баланс: <b>{fmt(balance)}</b>",
+        "Выбери категорию кнопкой ниже:",
+    ]
+    for title, subtitle in SHOP_GROUPS.values():
+        lines.append(f"{title} — {subtitle}")
+    if note:
+        lines.extend(["", note])
+    return "\n".join(lines)
 
 
 def rich_pet_shop_html(pet, balance: int, note: str | None = None) -> str:
+    from html import escape
+    doc = [
+        f"<h2>🛒 Магазин · {pet_title(pet)}</h2>",
+        f"<p>🍬 Баланс: <b>{fmt(balance)}</b></p>",
+        "<h3>Выбери категорию</h3>",
+    ]
+    for title, subtitle in SHOP_GROUPS.values():
+        doc.append(f"<p>{title} · {escape(subtitle)}</p>")
+    if note:
+        doc.append(f"<blockquote>{escape(note)}</blockquote>")
+    doc.append("<footer>Все покупки — за ириски внутри бота.</footer>")
+    return "".join(doc)
+
+
+def shop_category_caption(pet, balance: int, group: str, note: str | None = None) -> str:
+    title, _ = SHOP_GROUPS[group]
+    lines = [
+        f"{title} · {pet_title(pet)}",
+        f"🍬 Баланс: {fmt(balance)}",
+    ]
+    owned = set(parse_set(pet["items"]))
+    for item in shop_items(group):
+        status = " ✅" if (
+            item.kind == "wear" and item.code in owned or
+            item.kind == "house" and pet["house"]
+        ) else ""
+        lines.append(f"{item.emoji} {item.title} · {item.price} 🍬{status}")
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
+
+def rich_shop_category_html(pet, balance: int, group: str, note: str | None = None) -> str:
+    from html import escape
+    title, subtitle = SHOP_GROUPS[group]
     owned = set(parse_set(pet["items"]))
     rows = []
-    for item in SHOP:
-        tag = "✅ Куплено" if (item.kind == "wear" and item.code in owned) or (
+    for item in shop_items(group):
+        status = " · ✅" if (
+            item.kind == "wear" and item.code in owned or
             item.kind == "house" and pet["house"]
-        ) else item.note
-        rows.append([f"{item.emoji} {item.title}", f"{item.price} 🍬", tag])
+        ) else ""
+        rows.append([f"{item.emoji} {item.title}{status}", f"{item.price} 🍬"])
     doc = (
-        f"<h2>🛒 Магазин · {pet_title(pet)}</h2>"
-        f"<p>🍬 Баланс: <b>{fmt(balance)}</b></p>"
-        + rich_table(["Предмет", "Цена", "Эффект"], rows)
+        f"<h2>{title}</h2>"
+        f"<p>🍬 Баланс: <b>{fmt(balance)}</b> · {escape(subtitle)}</p>"
+        + rich_table(["Предмет", "Цена"], rows)
+        + "<p>Нажми на товар, чтобы увидеть описание и подтвердить покупку.</p>"
     )
     if note:
-        from html import escape
         doc += f"<blockquote>{escape(note)}</blockquote>"
-    return doc + "<footer>Товар общий для пары, оплачивает нажавший.</footer>"
+    return doc
 
+
+def shop_preview_caption(pet, balance: int, item) -> str:
+    return (
+        f"🧾 <b>{item.emoji} {item.title}</b>\n"
+        f"{item.note}\n"
+        f"Цена: {item.price} 🍬 · Баланс: {fmt(balance)} 🍬\n"
+        "Нажми «Купить», чтобы подтвердить."
+    )
+
+
+def rich_shop_preview_html(pet, balance: int, item) -> str:
+    from html import escape
+    if balance >= item.price:
+        outcome = f"После покупки: <b>{fmt(balance-item.price)} 🍬</b>"
+    else:
+        outcome = f"⚠️ Не хватает {fmt(item.price-balance)} 🍬"
+    return (
+        f"<h2>🧾 {item.emoji} {escape(item.title)}</h2>"
+        f"<p>{escape(item.note)}</p>"
+        f"<p>🍬 Цена: <b>{item.price}</b> · Баланс: <b>{fmt(balance)}</b></p>"
+        f"<p>{outcome}</p>"
+        "<footer>Покупка произойдёт только после подтверждения.</footer>"
+    )
+
+
+def rich_wardrobe_html(pet, note: str | None = None) -> str:
+    from html import escape
+    worn = worn_line(pet["worn"])
+    owned = parse_set(pet["items"])
+    doc = [
+        f"<h2>🎀 Гардероб · {pet_title(pet)}</h2>",
+        f"<p>👒 Надето: {worn or 'ничего'}</p>",
+        f"<p>Вещей в коллекции: <b>{len(owned)}</b></p>",
+        "<p>Нажми на аксессуар ниже, чтобы надеть или снять.</p>",
+    ]
+    if not owned:
+        doc.append("<p>Пока пусто. Загляни в магазин!</p>")
+    if note:
+        doc.append(f"<blockquote>{escape(note)}</blockquote>")
+    return "".join(doc)
 
 # ---------- карточка ----------
 
@@ -372,6 +476,7 @@ def _cb(action: str, pet_id: int, arg: str = "") -> str:
 
 
 def main_keyboard(pet, config: Config, many: bool) -> InlineKeyboardMarkup:
+    """Single mobile-first hub: profession lives under Development."""
     pid = int(pet["id"])
     rows: list[list[InlineKeyboardButton]] = []
     if int(pet["best_streak"]) > 0:
@@ -379,13 +484,19 @@ def main_keyboard(pet, config: Config, many: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=a.button, callback_data=_cb(a.code, pid))
             for a in ACTIONS.values()
         ])
-        rows.append([
-            InlineKeyboardButton(text="🧭 Приключения", callback_data=f"pg:menu:{pid}"),
-            InlineKeyboardButton(text="📋 Задания", callback_data=f"pg:tasks:{pid}"),
-        ])
-        rows.append([
-            InlineKeyboardButton(text="🛒 Магазин", callback_data=_cb("shop", pid)),
-            InlineKeyboardButton(text="🎀 Гардероб", callback_data=_cb("wardrobe", pid)),
+        rows.extend([
+            [
+                InlineKeyboardButton(text="🧭 Походы", callback_data=f"pg:menu:{pid}"),
+                InlineKeyboardButton(text="📋 Задания", callback_data=f"pg:tasks:{pid}"),
+            ],
+            [
+                InlineKeyboardButton(text="⭐ Развитие", callback_data=f"pg:progress:{pid}"),
+                InlineKeyboardButton(text="🛒 Магазин", callback_data=_cb("shop", pid)),
+            ],
+            [
+                InlineKeyboardButton(text="🎀 Гардероб", callback_data=_cb("wardrobe", pid)),
+                InlineKeyboardButton(text="📸 Фото", callback_data=_cb("photo", pid)),
+            ],
         ])
     nav = []
     if many:
@@ -398,41 +509,52 @@ def main_keyboard(pet, config: Config, many: bool) -> InlineKeyboardMarkup:
 
 
 def back_row(pid: int) -> list[InlineKeyboardButton]:
-    return [InlineKeyboardButton(text="⬅️ Назад", callback_data=_cb("main", pid))]
-
-
-def shop_caption(pet, balance: int, note: str | None = None) -> str:
-    owned = set(parse_set(pet["items"]))
-    lines = [f"🛒 <b>Магазин для {pet_title(pet)}</b>",
-             f"Твой баланс: <b>{fmt(balance)}</b> 🍬", ""]
-    for item in SHOP:
-        mark = ""
-        if item.kind == "wear" and item.code in owned:
-            mark = " ✅"
-        elif item.kind == "house" and int(pet["house"]):
-            mark = " ✅"
-        elif item.kind == "freeze":
-            mark = f" ({int(pet['freezes'])}/{FREEZE_MAX})"
-        lines.append(f"{item.emoji} {item.title} — {item.price} 🍬: {item.note}{mark}")
-    lines.extend(["", "Покупки общие: аксессуары и улучшения достаются питомцу, "
-                  "платит тот, кто нажал."])
-    if note:
-        lines.extend(["", note])
-    return "\n".join(lines)
+    return [InlineKeyboardButton(text="⬅️ К питомцу", callback_data=_cb("main", pid))]
 
 
 def shop_keyboard(pet) -> InlineKeyboardMarkup:
     pid = int(pet["id"])
-    buttons = [
-        InlineKeyboardButton(
-            text=f"{i.emoji} {i.title} · {i.price} 🍬", callback_data=_cb("buy", pid, i.code)
-        )
-        for i in SHOP
+    rows = [
+        [InlineKeyboardButton(
+            text=title, callback_data=_cb("shopcat", pid, group),
+        )]
+        for group, (title, _) in SHOP_GROUPS.items()
     ]
-    rows = [buttons[k:k + 2] for k in range(0, len(buttons), 2)]
     rows.append(back_row(pid))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
+def shop_category_keyboard(pet, group: str) -> InlineKeyboardMarkup:
+    pid = int(pet["id"])
+    items = shop_items(group)
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{item.emoji} {item.title} · {item.price} 🍬",
+            callback_data=_cb("preview", pid, item.code),
+        )
+        for item in items
+    ]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([
+        InlineKeyboardButton(text="⬅️ Категории", callback_data=_cb("shop", pid)),
+        InlineKeyboardButton(text="🐾 Питомец", callback_data=_cb("main", pid)),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def shop_preview_keyboard(pet, item, balance: int) -> InlineKeyboardMarkup:
+    pid = int(pet["id"])
+    rows = []
+    if balance >= item.price:
+        rows.append([InlineKeyboardButton(
+            text=f"✅ Купить за {item.price} 🍬",
+            callback_data=_cb("buy", pid, item.code),
+        )])
+    rows.append([InlineKeyboardButton(
+        text="⬅️ Назад к товарам",
+        callback_data=_cb("shopcat", pid, shop_group_for(item)),
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def wardrobe_caption(pet, note: str | None = None) -> str:
     owned = parse_set(pet["items"])
@@ -494,6 +616,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         reply_to=message.message_id,
         markup=main_keyboard(pet, config, len(pets) > 1),
         rich_html=rich_pet_html(pet, names, config),
+        show_image=False,
     )
 
 
@@ -541,17 +664,34 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
             rich_pet_html(pet_row, names, config, note),
         )
 
-    async def show_shop(pet_row, note: str | None = None):
+    async def show_shop(pet_row, note: str | None = None, group: str | None = None):
         urow = await db.get_user(pet_row["chat_id"], user.id)
         balance = int(urow["balance"]) if urow else 0
+        if group in SHOP_GROUPS:
+            text = shop_category_caption(pet_row, balance, group, note)
+            html = rich_shop_category_html(pet_row, balance, group, note)
+            keyboard = shop_category_keyboard(pet_row, group)
+        else:
+            text = shop_caption(pet_row, balance, note)
+            html = rich_pet_shop_html(pet_row, balance, note)
+            keyboard = shop_keyboard(pet_row)
         await _edit_card(message, db, card_key(pet_row, config),
-                         shop_caption(pet_row, balance, note), shop_keyboard(pet_row),
-                         rich_pet_shop_html(pet_row, balance, note))
+                         text, keyboard, html)
+
+    async def show_preview(pet_row, item):
+        row = await db.get_user(pet_row["chat_id"], user.id)
+        balance = int(row["balance"]) if row else 0
+        await _edit_card(
+            message, db, card_key(pet_row, config),
+            shop_preview_caption(pet_row, balance, item),
+            shop_preview_keyboard(pet_row, item, balance),
+            rich_shop_preview_html(pet_row, balance, item),
+        )
 
     async def show_wardrobe(pet_row, note: str | None = None):
         await _edit_card(message, db, card_key(pet_row, config),
                          wardrobe_caption(pet_row, note), wardrobe_keyboard(pet_row),
-                         panel_html(wardrobe_caption(pet_row, note)))
+                         rich_wardrobe_html(pet_row, note))
 
     pet = await refresh_care(db, pet, config, local_now(config).timestamp())
     alive = int(pet["best_streak"]) > 0
@@ -588,6 +728,35 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
         await callback.answer()
         return
 
+    if action == "shopcat":
+        if arg not in SHOP_GROUPS:
+            await callback.answer("Неизвестная категория", show_alert=True)
+            return
+        await show_shop(pet, group=arg)
+        await callback.answer()
+        return
+
+    if action == "preview":
+        item = SHOP_BY_CODE.get(arg)
+        if item is None:
+            await callback.answer("Товар не найден", show_alert=True)
+            return
+        await show_preview(pet, item)
+        await callback.answer()
+        return
+
+    if action == "photo":
+        names = await _names(db, pet)
+        key = card_key(pet, config)
+        text = f"📸 {pet_title(pet)}\n👫 {_plain(names, pet['user_a'])} и {_plain(names, pet['user_b'])}"
+        await _edit_card(
+            message, db, key, text,
+            InlineKeyboardMarkup(inline_keyboard=[back_row(pet_id)]),
+            rich_pet_photo_html(pet, names), show_image=True,
+        )
+        await callback.answer()
+        return
+
     if action == "wardrobe":
         await show_wardrobe(pet)
         await callback.answer()
@@ -598,7 +767,8 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
         if not note.startswith("✅"):
             await callback.answer(note, show_alert=True)
             return
-        await show_shop(await db.get_pet(pet_id), note)
+        item = SHOP_BY_CODE[arg]
+        await show_shop(await db.get_pet(pet_id), note, group=shop_group_for(item))
         await callback.answer()
         return
 
