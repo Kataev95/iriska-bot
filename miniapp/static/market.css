@@ -1,0 +1,46 @@
+/* PETS WORLD 1.6 — shared-pet chat market; no external fonts/media */
+.market-scene{height:145px;border:1px solid #a9b2f14a;border-radius:25px;
+ display:flex;justify-content:space-evenly;align-items:center;font-size:42px;
+ background:linear-gradient(155deg,#35406b,#4d5b85 59%,#417f74 61%,#235449);
+ box-shadow:inset 0 10px 15px #ffffff17,0 12px 28px #060b1f6e;margin:12px 0;}
+.market-scene span{font-size:72px;filter:drop-shadow(0 10px 7px #131b398c);}
+.market-overview{background:linear-gradient(135deg,#2b3d64,#254c50);}
+.market-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:13px;}
+.market-stats>div{background:#101a3199;border-radius:14px;padding:11px;}
+.market-stats strong{display:block;color:#86efdd;font-size:21px;}
+.market-stats small{display:block;margin-top:3px;color:#b7cae3;font-size:10px;line-height:1.3;}
+.market-seller .h2{margin:5px 0 0;}
+.market-kind-row{display:flex;gap:9px;padding:5px 0 14px;}
+.market-kind-row .pill{flex:1;padding:11px 6px;}
+.market-item-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+.market-item{display:flex;flex-direction:column;gap:3px;align-items:flex-start;
+ background:#222c45;border:1px solid #60719155;border-radius:15px;color:#fafcff;
+ padding:12px;min-height:99px;text-align:left;}
+.market-item.selected{border-color:#81e7d9;background:#274c56;box-shadow:inset 0 0 0 1px #81e7d955;}
+.market-item span{font-size:24px;}
+.market-item strong{font-size:12px;}
+.market-item small{font-size:10px;color:#b1c0de;}
+.market-qty-label{display:flex;justify-content:space-between;gap:10px;margin:16px 2px 7px;
+ color:#bfcae8;font-size:12px;}
+.market-qty-label strong{color:#f3f5ff;}
+.market-options{display:flex;flex-wrap:wrap;gap:6px;}
+.market-option{min-width:33px;flex:1 0 9%;padding:10px 5px;border-radius:11px;
+ border:1px solid #65709266;background:#293552;color:#b8c9e5;font-size:12px;font-weight:800;}
+.market-option.on{background:linear-gradient(125deg,#7966e0,#3b9caa);
+ border-color:#a7e9df;color:#fff;}
+.market-total{display:flex;justify-content:space-between;gap:7px;align-items:center;
+ border-radius:14px;background:#11243a9e;padding:13px;margin-top:15px;font-size:12px;}
+.market-total strong{font-size:15px;color:#f4d995;}
+.market-footnote{font-size:10px;line-height:1.5;color:#96a9c9;margin:11px 2px 0;}
+.market-listings-head{margin-top:25px;}
+.market-listing{margin:10px 0;}
+.market-listing-icon{flex-shrink:0;display:grid;place-items:center;background:#364569;
+ width:50px;height:50px;border-radius:15px;font-size:27px;}
+.market-listing-price{color:#ffe1a2;font-weight:800;font-size:16px;white-space:nowrap;}
+.market-listing-meta{margin-top:11px;flex-wrap:wrap;}
+.loading-market{text-align:center;color:#a6bce1;padding:35px 18px;}
+.loading-market .spinner{margin:auto;}
+.market-link{background:linear-gradient(120deg,#38466d,#2d4a55);}
+.market-link .h2{margin:0;}
+@media(max-width:355px){.market-scene span{font-size:55px;}
+ .market-item{padding:10px;}.market-option{min-width:30px;}}
