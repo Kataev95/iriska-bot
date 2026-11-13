@@ -4,7 +4,7 @@ const esc = x => String(x ?? "").replace(/[&<>"']/g, c=>({
 }[c]));
 const count = n => Math.max(0,Math.round(Number(n)||0));
 
-export function renderHouse(p, config) {
+function renderHouse(p, config) {
   const rooms = p.house_rooms || {};
   const total = Object.values(rooms).reduce((sum,n)=>sum+Number(n||0),0);
   const base = config.shop.find(x=>x.code==="house");
@@ -74,3 +74,5 @@ export function renderHouse(p, config) {
     '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и материалы →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="house-back">← Назад</button>';
 }
+
+window.PetsHouse = {renderHouse};

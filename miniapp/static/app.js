@@ -1,4 +1,3 @@
-import {renderHouse} from "./house.js?v=1";
 const TG = window.Telegram?.WebApp;
 const app = document.getElementById("app");
 const nav = document.getElementById("bottom-nav");
@@ -416,7 +415,7 @@ function render() {
     (ui.tab===id || ['wardrobe','inventory','house'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
   app.innerHTML=renderPicker()+({
     home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory,
-    house: p => renderHouse(p,ui.config)
+    house: p => window.PetsHouse.renderHouse(p,ui.config)
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
