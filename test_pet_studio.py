@@ -30,7 +30,7 @@ class StudioGameTests(unittest.IsolatedAsyncioTestCase):
                 "INSERT INTO pets(chat_id,user_a,user_b,invited_by,status,species,"
                 "streak,best_streak,created_ts,care_ts,food,joy,energy) "
                 "VALUES(?,?,?,?,'active','dragon',2,2,?,?,80,80,80)",
-                (chat,users[0],users[1],users[0],NOW,NOW),
+                (chat,users[0],users[1],users[0],NOW-86400,NOW),
             )
         await self.db._require().commit()
 
@@ -71,7 +71,7 @@ class StudioGameTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(x["unlocked"] for x in state["stickers"]),1)
         self.assertEqual(state["metrics"]["days_both"],0)
         self.assertEqual(state["album"][0]["kind"],"origin")
-        self.assertEqual(state["album"][0]["day"],"13.11.2026")
+        self.assertEqual(state["album"][0]["day"],"12.11.2026")
         self.assertIsNone(await self.db.studio_state(1,201,TZ))
         self.assertIsNone(await self.db.studio_state(3,101,TZ))
         self.assertIsInstance(await self.db.studio_state(3,301,TZ),dict)
