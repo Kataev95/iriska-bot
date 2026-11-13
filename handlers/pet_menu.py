@@ -140,23 +140,51 @@ async def send_pet_photo(
     reply_to: int | None = None, markup: InlineKeyboardMarkup | None = None,
     rich_html: str | None = None, show_image: bool = True,
 ) -> Message | None:
-    """Фото питомца с подписью; если картинки нет или подпись длинная — текстом."""
+    """Rich card first, including photo; legacy photo only as last resort.
+
+    The media-in-rich variant is important when Telegram rejects remote <img>
+    while still accepting InputRichMessage.media (Bot API 10.2+).
+    """
     reply = (
         ReplyParameters(message_id=reply_to, allow_sending_without_reply=True)
         if reply_to else None
     )
-    # Keep the pet illustration visible in the primary Rich HUD.
-    # Other screens can omit repeated artwork without hiding the main pet photo.
     if os.environ.get("RICH_MESSAGES_ENABLED", "1") != "0":
-        try:
-            return await send_rich(
-                bot, chat_id, caption, html=rich_html,
-                image_url=asset_url(key) if show_image else None,
-                reply_to_message_id=reply_to,
-                reply_markup=markup, fallback=False,
-            )
-        except (TelegramBadRequest, TelegramNotFound) as exc:
-            logger.info("Rich HUD unsupported, use legacy photo: %s", exc)
+        photo_url = asset_url(key)
+        variants = []
+        if show_image:
+            variants.append({"image_url": photo_url})
+            cached_id = await db.get_pet_media(key)
+            if cached_id:
+                variants.append({"image_media": cached_id})
+            variants.append({"image_media": photo_url})
+        else:
+            variants.append({})
+        for variant in variants:
+            try:
+                return await send_rich(
+                    bot, chat_id, caption, html=rich_html,
+                    reply_to_message_id=reply_to, reply_markup=markup,
+                    fallback=False, **variant,
+                )
+            except (TelegramBadRequest, TelegramNotFound) as exc:
+                logger.warning(
+                    "Pet Rich send failed: key=%s, variant=%s, err=%s",
+                    key, next(iter(variant), "text"), exc,
+                )
+        # Preserve native rich formatting even if the photo transport fails.
+        if show_image:
+            try:
+                return await send_rich(
+                    bot, chat_id, caption, html=rich_html,
+                    reply_to_message_id=reply_to, reply_markup=markup,
+                    fallback=False,
+                )
+            except (TelegramBadRequest, TelegramNotFound) as exc:
+                logger.error("Rich pet card unavailable, legacy photo last resort: %s", exc)
+    else:
+        logger.warning("Rich Messages disabled by RICH_MESSAGES_ENABLED=0")
+
     media, from_disk = await _media(db, key)
     if media is not None and len(caption) <= 1024:
         for _ in range(2):
@@ -168,24 +196,24 @@ async def send_pet_photo(
                 if from_disk:
                     await _remember(db, key, msg)
                 return msg
-            except TelegramBadRequest as e:
+            except TelegramBadRequest as exc:
                 if from_disk:
-                    logger.warning("Фото %s не ушло: %s", key, e)
+                    logger.warning("Pet photo upload rejected: %s", exc)
                     break
-                # file_id протух (например, сменили бота) — грузим файл заново
                 await db.drop_pet_media(key)
                 media, from_disk = await _media(db, key)
                 if media is None:
                     break
-            except Exception as e:
-                logger.warning("Фото %s не ушло: %s", key, e)
+            except Exception:
+                logger.exception("Pet photo send failed for %s", key)
                 break
     try:
-        return await send_rich(bot, 
-            chat_id, caption, reply_markup=markup, reply_parameters=reply
+        return await send_rich(
+            bot, chat_id, caption, html=rich_html,
+            reply_markup=markup, reply_parameters=reply,
         )
-    except Exception as e:
-        logger.warning("Сообщение о питомце в чат %s не ушло: %s", chat_id, e)
+    except Exception:
+        logger.exception("Pet card completely failed: chat=%s", chat_id)
         return None
 
 
@@ -194,36 +222,70 @@ async def _edit_card(
     markup: InlineKeyboardMarkup | None, rich_html: str | None = None,
     show_image: bool = False,
 ) -> None:
-    """Update a rich HUD in-place; legacy photo cards retain the old path."""
+    """Keep Rich content on update, never downgrade rich media into plain text."""
+    rich_enabled = os.environ.get("RICH_MESSAGES_ENABLED", "1") != "0"
+    url = asset_url(key) if show_image else None
     if not message.photo:
         if await edit_rich(
-            message, caption, html=rich_html,
-            image_url=asset_url(key) if show_image else None,
+            message, caption, html=rich_html, image_url=url,
             reply_markup=markup,
         ):
             return
-    if message.photo:
+        if rich_enabled and show_image:
+            cached_id = await db.get_pet_media(key)
+            # Alternative structured media transport, preserving the photo.
+            for ref in (cached_id, url):
+                if not ref:
+                    continue
+                if await edit_rich(
+                    message, caption, html=rich_html,
+                    image_media=ref, reply_markup=markup,
+                ):
+                    return
+    elif not rich_enabled:
+        # Old photo cards still need to work in explicit legacy mode.
         media, from_disk = await _media(db, key)
         if media is not None and len(caption) <= 1024:
             try:
                 msg = await message.edit_media(
-                    InputMediaPhoto(media=media, caption=caption), reply_markup=markup
+                    InputMediaPhoto(media=media, caption=caption),
+                    reply_markup=markup,
                 )
                 if from_disk:
                     await _remember(db, key, msg)
                 return
-            except TelegramBadRequest as e:
-                if "not modified" in str(e):
+            except TelegramBadRequest as exc:
+                if "not modified" in str(exc):
                     return
-                logger.warning("Не смог обновить фото карточки: %s", e)
+                logger.warning("Could not edit old photo card: %s", exc)
         try:
             await message.edit_caption(caption=caption[:1024], reply_markup=markup)
         except TelegramBadRequest:
             pass
         return
+
+    # A failed rich edit must NOT be followed by message.edit_text(): this
+    # converted the user's rich card into a plain Telegram message.
+    # Instead create a fresh Rich HUD (also upgrades old legacy photo cards).
+    if rich_enabled:
+        result = await send_pet_photo(
+            message.bot, db, message.chat.id, key, caption,
+            markup=markup, rich_html=rich_html, show_image=show_image,
+        )
+        if result is not None:
+            try:
+                await message.bot.edit_message_reply_markup(
+                    chat_id=message.chat.id, message_id=message.message_id,
+                    reply_markup=None,
+                )
+            except (TelegramBadRequest, TelegramNotFound) as exc:
+                logger.info("Old HUD keyboard could not be removed: %s", exc)
+        return
+
+    # Explicit legacy mode only.
     try:
         await message.edit_text(caption, reply_markup=markup)
-    except TelegramBadRequest:
+    except (TelegramBadRequest, TelegramNotFound):
         pass
 
 
