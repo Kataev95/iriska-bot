@@ -390,6 +390,85 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"pet_id":1,"kind":"business_sell","code":"florist"})
         self.assertEqual(unauth.status,401)
 
+    async def test_market_auth_escrow_and_balance_transfer(self):
+        await self.db._require().execute(
+            "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
+            (1,"leaf",5),
+        )
+        await self.db._require().commit()
+        await self.db.adjust_balance(CHAT_ID,201,20,"test",None)
+        no_auth=await self.client.get("/api/market/1")
+        self.assertEqual(no_auth.status,401)
+        alien=await self.client.get("/api/market/1",
+            headers={"X-Telegram-Init-Data":signed(201)})
+        self.assertEqual(alien.status,403)
+
+        payload={"kind":"market_create","pet_id":1,"item_kind":"material",
+                 "code":"leaf","quantity":3,"unit_price":2,
+                 "balance":9999999,"user_id":201,"chat_id":999}
+        attack=await self.client.post("/api/action",
+            headers={"X-Telegram-Init-Data":signed(201)},json=payload)
+        self.assertEqual(attack.status,403)
+        created=await self.client.post("/api/action",headers=self.headers,json=payload)
+        self.assertEqual(created.status,200)
+        data=await created.json()
+        self.assertTrue(data["message"].startswith("✅"))
+        self.assertEqual(data["pet"]["materials"]["leaf"],2)
+
+        browse=await self.client.get("/api/market/2",
+            headers={"X-Telegram-Init-Data":signed(201)})
+        self.assertEqual(browse.status,200)
+        market=await browse.json()
+        self.assertEqual(market["remaining_buys"],8)
+        self.assertEqual(len(market["listings"]),1)
+        listing=market["listings"][0]
+        self.assertTrue(listing["can_buy"])
+        self.assertEqual(listing["total_price"],6)
+        ident=listing["id"]
+        own=await self.client.get("/api/market/1",headers=self.headers)
+        self.assertFalse((await own.json())["listings"][0]["can_buy"])
+
+        bought=await self.client.post("/api/action",
+            headers={"X-Telegram-Init-Data":signed(201)},
+            json={"kind":"market_buy","pet_id":2,"listing_id":ident,
+                  "quantity":100000,"price":0,"chat_id":CHAT_ID*2})
+        self.assertEqual(bought.status,200)
+        purchased=await bought.json()
+        self.assertTrue(purchased["message"].startswith("✅"))
+        self.assertEqual(purchased["pet"]["materials"]["leaf"],3)
+        self.assertEqual(purchased["pet"]["balance"],14)
+        self.assertEqual((await self.db.get_user(CHAT_ID,101))["balance"],26)
+        self.assertEqual((await self.db.inventory_state(1))[0]["leaf"],2)
+        again=await self.client.post("/api/action",
+            headers={"X-Telegram-Init-Data":signed(202)},
+            json={"kind":"market_buy","pet_id":2,"listing_id":ident})
+        self.assertIn("уже",(await again.json())["message"])
+        self.assertEqual((await self.db.inventory_state(2))[0]["leaf"],3)
+        remaining=await self.client.get("/api/market/2",
+            headers={"X-Telegram-Init-Data":signed(201)})
+        self.assertEqual((await remaining.json())["listings"],[])
+
+    async def test_market_rejects_invalid_items_and_forged_numbers(self):
+        await self.db._require().execute(
+            "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
+            (1,"wood",10),
+        )
+        await self.db._require().commit()
+        for value in (0,6,-1,True,"3"):
+            invalid=await self.client.post("/api/action",headers=self.headers,
+                json={"pet_id":1,"kind":"market_create","item_kind":"material",
+                      "code":"wood","quantity":value,"unit_price":2})
+            data=await invalid.json()
+            self.assertIn("Неверное",data["message"])
+        unknown=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"market_create","item_kind":"custom",
+                  "code":"__grant_iriska","quantity":1,"unit_price":1})
+        self.assertIn("нельзя",(await unknown.json())["message"])
+        self.assertEqual((await self.db.inventory_state(1))[0]["wood"],10)
+        forged=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"market_buy","listing_id":999999})
+        self.assertIn("закрыто",(await forged.json())["message"])
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -429,7 +508,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=5", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=7", html)
+        self.assertIn("/static/app.js?v=8", html)
+        self.assertIn("/static/market.css?v=1", html)
+        self.assertIn("/static/market.js?v=1", html)
         self.assertIn("/static/business.css?v=1", html)
         self.assertIn("/static/business.js?v=1", html)
 
@@ -465,6 +546,10 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('window.PetsBusiness.renderBusiness', js)
         self.assertIn('data-business-build=', (static/"business.js").read_text(encoding="utf-8"))
         self.assertIn('business-hero', (static/"business.css").read_text(encoding="utf-8"))
+        self.assertIn('window.PetsMarket.renderMarket', js)
+        self.assertIn('data-market-buy=', (static/"market.js").read_text(encoding="utf-8"))
+        self.assertIn('data-market-post=', (static/"market.js").read_text(encoding="utf-8"))
+        self.assertIn('market-scene', (static/"market.css").read_text(encoding="utf-8"))
 
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
@@ -473,7 +558,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("app.js", "house.js", "business.js"):
+        for name in ("app.js", "house.js", "business.js", "market.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)

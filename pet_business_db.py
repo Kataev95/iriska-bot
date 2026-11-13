@@ -11,9 +11,10 @@ from pet_business import (
     MAX_BUSINESS_LEVEL,
 )
 from pet_inventory import MATERIALS
+from pet_market_db import PetMarketDatabase
 
 
-class PetBusinessDatabase:
+class PetBusinessDatabase(PetMarketDatabase):
     async def _migrate_business(self):
         db = self._require()
         await db.executescript("""
@@ -67,6 +68,7 @@ class PetBusinessDatabase:
             CREATE INDEX IF NOT EXISTS idx_pet_business_sales_daily
                 ON pet_business_sales(pet_id,day);
         """)
+        await self._migrate_market()
 
     async def business_state(self, pet_id, day):
         """Read-only UI data. Caller checks ownership before invoking this."""
