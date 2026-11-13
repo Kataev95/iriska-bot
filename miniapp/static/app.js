@@ -25,7 +25,9 @@ for (const event of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenCha
 syncSafeArea();
 
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
-             group: "food", busy: false, toastTimer: 0, picker: false };
+             group: "food", busy: false, syncing: false, lastSync: 0,
+             syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
+             returnTab: "home" };
 const tabs = [
   ["home","🏠","Главная"], ["trips","🧭","Походы"],
   ["tasks","📋","Задания"], ["shop","🛍","Магазин"],
@@ -36,9 +38,22 @@ const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
   "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
 }[c]));
 const value = n => Math.max(0, Math.round(Number(n || 0)));
-const stat = (icon,title,amount) => '<div class="stat"><span>'+icon+' '+title+'</span>'+
+const stat = (icon,title,amount) => '<div class="stat '+(value(amount)<30?'is-low':value(amount)<60?'is-medium':'')+'"><span>'+icon+' '+title+'</span>'+
   '<strong>'+value(amount)+'%</strong><div class="progress"><i style="width:'+Math.min(value(amount),100)+'%"></i></div></div>';
-function tap() { try { TG?.HapticFeedback?.impactOccurred("light"); } catch {} }
+const serverNow = () => (Date.now() + ui.clockDelta) / 1000;
+const syncClock = p => {if(Number.isFinite(Number(p.server_time))) ui.clockDelta = p.server_time*1000-Date.now();};
+function duration(seconds) {
+  const total = Math.max(0,Math.ceil(seconds/60));
+  if (total>=60) return Math.floor(total/60)+' ч '+(total%60)+' мин';
+  return Math.max(1,total)+' мин';
+}
+function haptic(type="light") {
+  try {
+    if(type==="success" || type==="error") TG?.HapticFeedback?.notificationOccurred(type);
+    else TG?.HapticFeedback?.impactOccurred(type);
+  } catch {}
+}
+function tap() { haptic("light"); }
 function showToast(text) {
   toast.textContent = String(text || "");
   toast.classList.add("visible");
@@ -47,16 +62,27 @@ function showToast(text) {
 }
 async function api(path, payload) {
   if (!TG?.initData) throw new Error("Открой игру через кнопку в Telegram.");
-  const result = await fetch(path, {
-    method: payload ? "POST" : "GET",
-    headers: {"X-Telegram-Init-Data": TG.initData, ...(payload ? {"Content-Type":"application/json"} : {})},
-    body: payload ? JSON.stringify(payload) : undefined,
-    cache:"no-store",
-  });
-  let data;
-  try { data = await result.json(); } catch { throw new Error("Ошибка сервера"); }
-  if (!result.ok) throw new Error(data.error || data.message || "Не удалось выполнить запрос");
-  return data;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const result = await fetch(path, {
+      method: payload ? "POST" : "GET",
+      headers: {"X-Telegram-Init-Data": TG.initData, ...(payload ? {"Content-Type":"application/json"} : {})},
+      body: payload ? JSON.stringify(payload) : undefined,
+      cache:"no-store", signal: controller.signal,
+    });
+    let data;
+    try { data = await result.json(); } catch { throw new Error("Некорректный ответ сервера"); }
+    if (!result.ok) throw new Error(data.error || data.message || "Не удалось выполнить запрос");
+    return data;
+  } catch (e) {
+    if (e.name==="AbortError") {
+      throw new Error(payload
+        ? "Сервер не ответил. Сначала обнови данные, прежде чем повторять покупку или действие."
+        : "Сервер не отвечает. Проверь интернет и повтори.");
+    }
+    throw e;
+  } finally {clearTimeout(timer);}
 }
 function renderPicker() {
   if (ui.pets.length < 2) return "";
@@ -68,9 +94,9 @@ function renderPicker() {
 }
 function hero(p) {
   const target = p.next_xp ?? p.xp;
-  const prior = 25*p.level*(p.level-1);
+  const prior = Number.isFinite(p.level_start_xp) ? p.level_start_xp : 25*p.level*(p.level-1);
   const progress = p.next_xp == null ? 100 :
-    Math.min(100,Math.max(0,Math.round((p.xp-prior)/(target-prior)*100)));
+    Math.min(100,Math.max(0,Math.round((p.xp-prior)/Math.max(1,target-prior)*100)));
   return '<div class="hero"><div class="hero-overlay">✨ Уровень '+p.level+' / 20</div>'+
     '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'"></div>'+
     '<div class="panel"><div class="eyebrow">МОЙ ПИТОМЕЦ</div>'+
@@ -78,13 +104,21 @@ function hero(p) {
     '<div class="subtitle">🤝 Вместе с '+safe(p.partner)+'</div></div>'+
     '<div class="chip chip-purple">🔥 '+p.streak+' дн.</div></div>'+
     '<div class="stat-grid">'+stat("🍖","Сытость",p.food)+stat("😊","Настроение",p.joy)+stat("⚡","Энергия",p.energy)+'</div>'+
-    '<div class="xp-line"><b>⭐ '+p.xp+' XP</b><div class="progress"><i style="width:'+progress+'%"></i></div>'+
-    '<small>'+(p.next_xp == null ? "MAX":p.next_xp+' XP')+'</small></div></div>';
+    '<div class="xp-line"><b>⭐ '+p.xp+' XP</b><div class="progress" role="progressbar" aria-label="Опыт текущего уровня" aria-valuenow="'+progress+'" aria-valuemin="0" aria-valuemax="100"><i style="width:'+progress+'%"></i></div>'+
+    '<small>'+(p.next_xp == null ? "MAX":p.next_xp+' XP')+'</small></div>'+
+    '<p class="mood-caption">'+safe(p.mood||"🐾 У питомца всё хорошо")+'</p></div>';
 }
 function home(p) {
-  const actions = ui.config.actions.map(action =>
-    '<button class="btn" data-action="care" data-code="'+safe(action.code)+'">'+safe(action.name)+'</button>'
-  ).join("");
+  const actions = ui.config.actions.map(action => {
+    const state = p.care_state?.[action.code] || {};
+    const wait = Math.max(0,(state.ready_at||0)-serverNow());
+    const blocked = Boolean(state.blocked_reason);
+    const disabled = blocked || wait>0;
+    const hint = wait>0 ? "через "+duration(wait) : (blocked ? "Недоступно" : "Можно сейчас");
+    return '<button class="btn care-button" data-action="care" data-code="'+safe(action.code)+'" '+
+      (disabled?'disabled ':'')+'title="'+safe(state.blocked_reason||hint)+'">'+
+      '<span>'+safe(action.name)+'</span><small>'+(disabled?safe(hint):'✓ Готово')+'</small></button>';
+  }).join("");
   return hero(p)+'<div class="panel"><div class="eyebrow">ЕЖЕДНЕВНЫЙ УХОД</div>'+
     '<h2 class="h2">Позаботьтесь о '+safe(p.name)+'</h2>'+
     '<div class="buttons">'+actions+'</div></div>'+
@@ -113,19 +147,21 @@ function trips(p) {
   }
   return '<div class="section-heading">🧭 Приключения</div>'+
     '<p class="section-lead">Выбирай маршрут, собирай награды и повышай уровень питомца.</p>'+
+    '<div class="notice">🎟 Походов осталось сегодня: <b>'+value(p.trips_remaining ?? 3)+'/3</b></div>'+
     ui.config.routes.map(r => {
       const bonusXp = p.profession === "explorer" ? Math.floor(r.xp*1.2) : r.xp;
       const energy = r.energy-(p.profession==="artisan" ? 3:0);
       const coins = r.coins+(p.profession==="merchant" ? 1:0);
       const time = r.seconds<3600 ? r.seconds/60+' мин' : r.seconds/3600+' ч';
-      const locked = p.food<20 || p.energy<energy;
+      const limited = p.trips_remaining === 0;
+      const locked = limited || p.food<20 || p.energy<energy;
       return '<div class="panel route"><div class="card-row"><div class="card-icon">'+
         safe(r.name.split(" ")[0])+'</div><div class="card-text"><strong>'+
         safe(r.name)+'</strong><small>Приключение · '+time+'</small></div></div>'+
         '<div class="route-info"><span class="chip">⚡ '+energy+'</span>'+
         '<span class="chip">⭐ '+bonusXp+' XP</span><span class="chip">🍬 '+coins+'</span></div>'+
         '<button class="btn btn-primary" data-action="start" data-code="'+safe(r.code)+'" '+
-        (locked?'disabled':'')+'>'+(locked?'🔒 Мало энергии или еды':'🧭 Отправиться')+'</button></div>';
+        (locked?'disabled':'')+'>'+(limited?'🔒 Лимит походов на сегодня':locked?'🔒 Мало энергии или еды':'🧭 Отправиться')+'</button></div>';
     }).join("");
 }
 function tasks(p) {
@@ -137,7 +173,9 @@ function tasks(p) {
       safe(t.name)+'</strong><small>'+ (t.claimed?'Награда получена':t.done?'Готово к получению':'Ещё не выполнено')+
       '</small></div><div class="card-end">+'+t.xp+' XP</div></div></div>').join("")+
     (claimable?'<button class="btn btn-cyan btn-wide" data-action="daily">🎁 Забрать весь опыт</button>':
-    '<div class="notice">Новые задания будут доступны завтра.</div>');
+    '<div class="notice">'+(p.daily.every(t=>t.claimed)
+      ? "✅ Все награды получены. Новые задания будут завтра."
+      : "✨ Выполняй задания, чтобы получить опыт. Новые задания — завтра.")+'</div>');
 }
 function shop(p) {
   const groups = [["food","🍪 Еда"],["wear","🎀 Аксессуары"],["extras","🏠 Улучшения"]];
