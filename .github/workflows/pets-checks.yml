@@ -31,6 +31,7 @@ jobs:
           python test_pet_house.py
           python test_pet_business.py
           python test_pet_market.py
+          python test_pet_league.py
           python test_pet_event_atomic.py
       - name: Rich UI and Mini App API tests
         run: |
