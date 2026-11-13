@@ -4,7 +4,7 @@ No background cron or volatile cache. Every market request lazily expires
 stale offers and refunds escrow. DB has one writer lock and BEGIN IMMEDIATE
 through the inherited _game_transaction.
 """
-from datetime import datetime
+from datetime import datetime, timedelta, time as time_of_day
 
 from pet_market import (
     ITEM_TYPES, LISTING_TTL_SECONDS, MAX_ACTIVE_LISTINGS_PER_PET,
@@ -126,30 +126,32 @@ class PetMarketDatabase:
                     (pet_id, day),
                 )
             ).fetchone()
+            start_day = datetime.fromtimestamp(now, tz).date()
+            day_start = datetime.combine(start_day, time_of_day.min, tzinfo=tz).timestamp()
+            day_end = datetime.combine(
+                start_day + timedelta(days=1), time_of_day.min, tzinfo=tz
+            ).timestamp()
             bought = await (
                 await db.execute(
                     "SELECT COUNT(*) FROM pet_market_listings "
                     "WHERE buyer_pet_id=? AND state='sold' "
                     "AND settled_ts>=? AND settled_ts<?",
-                    (
-                        pet_id,
-                        datetime.fromtimestamp(now, tz).replace(
-                            hour=0,minute=0,second=0,microsecond=0
-                        ).timestamp(),
-                        datetime.fromtimestamp(now, tz).replace(
-                            hour=0,minute=0,second=0,microsecond=0
-                        ).timestamp()+86400,
-                    ),
+                    (pet_id, day_start, day_end),
                 )
             ).fetchone()
-            # Note: the 24h range is valid for Europe/Moscow configured TZ.
+            active_count = await (
+                await db.execute(
+                    "SELECT COUNT(*) FROM pet_market_listings "
+                    "WHERE seller_pet_id=? AND state='active'",
+                    (pet_id,),
+                )
+            ).fetchone()
             return {
                 "chat_id": chat_id,
                 "remaining_posts": max(0, MAX_LISTINGS_PER_PET_DAY-int(listing_count[0])),
                 "remaining_buys": max(0, MAX_BUYS_PER_PET_DAY-int(bought[0])),
                 "remaining_active": max(
-                    0, MAX_ACTIVE_LISTINGS_PER_PET -
-                    sum(int(r["seller_pet_id"])==pet_id for r in rows)
+                    0, MAX_ACTIVE_LISTINGS_PER_PET - int(active_count[0])
                 ),
                 "listings": [
                     {
@@ -281,14 +283,11 @@ class PetMarketDatabase:
                 return "Питомец продавца больше недоступен"
             if user_id in (seller["user_a"],seller["user_b"]):
                 return "Нельзя покупать товары питомца, которым вы владеете"
-            day_start = datetime.fromtimestamp(now, tz).replace(
-                hour=0, minute=0, second=0, microsecond=0
+            day = datetime.fromtimestamp(now, tz).date()
+            day_start = datetime.combine(day, time_of_day.min, tzinfo=tz).timestamp()
+            day_end = datetime.combine(
+                day + timedelta(days=1), time_of_day.min, tzinfo=tz
             ).timestamp()
-            next_start = (
-                datetime.fromtimestamp(now, tz).date()
-                + __import__("datetime").timedelta(days=1)
-            )
-            day_end = datetime.combine(next_start,datetime.min.time(),tzinfo=tz).timestamp()
             bought = await (
                 await db.execute(
                     "SELECT COUNT(*) FROM pet_market_listings "
