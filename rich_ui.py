@@ -80,6 +80,19 @@ def _payload(html: str, image_url: str | None = None) -> dict[str, str]:
     return {"html": html}
 
 
+async def _plain_send(bot, chat_id, text, *, reply_markup=None,
+                      reply_parameters=None, disable_notification=None, **kwargs):
+    """Do not pass absent optional arguments (works with minimal test doubles)."""
+    options = dict(kwargs)
+    if reply_markup is not None:
+        options["reply_markup"] = reply_markup
+    if reply_parameters is not None:
+        options["reply_parameters"] = reply_parameters
+    if disable_notification is not None:
+        options["disable_notification"] = disable_notification
+    return await bot.send_message(chat_id, text, **options)
+
+
 async def send_rich(
     bot, chat_id: int | str, text: str, *, html: str | None = None,
     image_url: str | None = None,
@@ -95,11 +108,10 @@ async def send_rich(
             message_id=reply_to_message_id, allow_sending_without_reply=True,
         )
     if os.environ.get('RICH_MESSAGES_ENABLED', '1') == '0':
-        return await bot.send_message(
-            chat_id, text, reply_markup=reply_markup,
+        return await _plain_send(
+            bot, chat_id, text, reply_markup=reply_markup,
             reply_parameters=reply_parameters,
-            disable_notification=disable_notification,
-            **kwargs,
+            disable_notification=disable_notification, **kwargs,
         )
     doc = html or panel_html(text)
     try:
@@ -121,11 +133,10 @@ async def send_rich(
         if not fallback:
             raise exc
         logger.warning("Rich send unavailable: %s", exc)
-        return await bot.send_message(
-            chat_id, text, reply_markup=reply_markup,
+        return await _plain_send(
+            bot, chat_id, text, reply_markup=reply_markup,
             reply_parameters=reply_parameters,
-            disable_notification=disable_notification,
-            **kwargs,
+            disable_notification=disable_notification, **kwargs,
         )
 
 
