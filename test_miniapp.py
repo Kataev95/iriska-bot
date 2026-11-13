@@ -178,6 +178,84 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started["trips_remaining"], 2)
         self.assertIsNotNone(started["trip"])
 
+    async def test_inventory_craft_auth_and_forged_browser_resources(self):
+        bootstrap = await (
+            await self.client.get("/api/bootstrap", headers=self.headers)
+        ).json()
+        self.assertEqual(len(bootstrap["materials"]), 4)
+        self.assertEqual(len(bootstrap["recipes"]), 3)
+        self.assertEqual(bootstrap["routes"][0]["loot"]["leaf"], 2)
+        r = await self.client.get("/api/pet/1", headers=self.headers)
+        pet = await r.json()
+        self.assertEqual(pet["materials"]["leaf"], 0)
+        self.assertEqual(pet["crafts"], [])
+
+        payload = {"pet_id": 1, "kind": "craft", "code": "leaf_crown",
+                   "user_id": 201, "materials": {"leaf": 500, "wood": 500}}
+        r = await self.client.post("/api/action", headers=self.headers, json=payload)
+        self.assertEqual(r.status, 200)
+        self.assertIn("Не хватает", (await r.json())["message"])
+
+        await self.db._require().executemany(
+            "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
+            [(1,"leaf",4), (1,"wood",2)]
+        )
+        await self.db._require().commit()
+        denied = await self.client.post(
+            "/api/action",
+            headers={"X-Telegram-Init-Data": signed(201)},
+            json=payload,
+        )
+        self.assertEqual(denied.status, 403)
+
+        r = await self.client.post("/api/action", headers=self.headers, json=payload)
+        self.assertEqual(r.status, 200)
+        data = await r.json()
+        self.assertTrue(data["message"].startswith("✅"))
+        self.assertIn("leaf_crown", data["pet"]["crafts"])
+        self.assertEqual(data["pet"]["materials"]["leaf"], 0)
+        self.assertEqual(data["pet"]["materials"]["wood"], 0)
+        self.assertEqual(data["pet"]["balance"], 20)
+
+        partner = await self.client.get(
+            "/api/pet/1", headers={"X-Telegram-Init-Data": signed(102)}
+        )
+        self.assertIn("leaf_crown", (await partner.json())["crafts"])
+        again = await self.client.post("/api/action", headers=self.headers, json=payload)
+        self.assertEqual(again.status, 200)
+        self.assertIn("уже изготовлена", (await again.json())["message"])
+        invalid = await self.client.post("/api/action", headers=self.headers,
+             json={"pet_id":1,"kind":"craft","code":"__admin"})
+        self.assertEqual(invalid.status, 400)
+
+    async def test_trip_claim_grants_real_materials_via_api_once(self):
+        r = await self.client.post("/api/action", headers=self.headers,
+              json={"pet_id":1,"kind":"start","code":"park"})
+        self.assertEqual(r.status, 200)
+        trip = (await r.json())["pet"]["trip"]
+        self.assertIsNotNone(trip)
+        # Make this specific test expedition claimable without sleeping 15min.
+        await self.db._require().execute(
+            "UPDATE pet_trips SET finish_at=? WHERE id=?",
+            (time.time()-1,trip["id"]),
+        )
+        await self.db._require().commit()
+        claim = {"pet_id":1,"kind":"claim","trip_id":trip["id"]}
+        r = await self.client.post("/api/action",headers=self.headers,json=claim)
+        self.assertEqual(r.status,200)
+        data = await r.json()
+        self.assertIn("🎒",data["message"])
+        self.assertEqual(data["pet"]["materials"]["leaf"],2)
+        self.assertEqual(data["pet"]["materials"]["wood"],1)
+        self.assertEqual(data["pet"]["balance"],22)
+        self.assertEqual(data["pet"]["xp"],35)
+        r = await self.client.post("/api/action",headers=self.headers,json=claim)
+        self.assertEqual(r.status,200)
+        data = await r.json()
+        self.assertIn("уже получена",data["message"])
+        self.assertEqual(data["pet"]["materials"]["leaf"],2)
+        self.assertEqual(data["pet"]["xp"],35)
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -214,8 +292,8 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn('care_state', js)
         self.assertIn("trips_remaining", js)
         self.assertIn("syncClock(snapshot)", js)
-        self.assertIn("/static/style.css?v=4", html)
-        self.assertIn("/static/app.js?v=4", html)
+        self.assertIn("/static/style.css?v=5", html)
+        self.assertIn("/static/app.js?v=5", html)
 
 
 class MiniAppFeedbackTests(unittest.TestCase):
