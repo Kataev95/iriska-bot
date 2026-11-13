@@ -1,4 +1,4 @@
-"""Команды участников: статистика, топы, баланс, вывод, справка."""
+"""Команды участников: статистика, топы, баланс, справка."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ HOURS_TRIGGERS = {"бонусные часы", "бонус часы", "часы 
 BALANCE_TRIGGERS = {"баланс", "мой баланс", "ириски", "мои ириски"}
 TOP_TRIGGERS = {"топ", "топ чата", "общий топ"}
 WEEK_TRIGGERS = {"топ недели", "топ за неделю", "недельный топ"}
-WITHDRAW_TRIGGERS = {"вывод", "вывести ириски"}
 HELP_TRIGGERS = {"помощь", "как заработать", "правила ирисок"}
 
 
@@ -60,18 +59,10 @@ async def cmd_balance(message: Message, db: Database, config: Config) -> None:
     row = await db.get_user(message.chat.id, user.id)
     balance = row["balance"] if row else 0
     shop_line = "\n🛍 Потратить: /shop" if config.shop_enabled else ""
-    if balance >= config.withdraw_threshold:
-        await message.reply(
-            f"🍬 Баланс: <b>{fmt(balance)}</b> {iriski(balance)} — ✅ можно выводить!\n"
-            f"Пиши {config.admin_contact}{shop_line}"
-        )
-    else:
-        need = config.withdraw_threshold - balance
-        await message.reply(
-            f"🍬 Баланс: <b>{fmt(balance)}</b> {iriski(balance)}\n"
-            f"До вывода ({fmt(config.withdraw_threshold)}) осталось "
-            f"{fmt(need)} {iriski(need)}. Подробнее: /me{shop_line}"
-        )
+    await message.reply(
+        f"🍬 Баланс: <b>{fmt(balance)}</b> {iriski(balance)}\n"
+        f"Ириски — постоянная игровая валюта бота.{shop_line}"
+    )
 
 
 @router.message(GroupF, Command("top"))
@@ -129,32 +120,6 @@ async def cmd_day(message: Message, db: Database, config: Config) -> None:
     await message.reply("\n".join(lines))
 
 
-@router.message(GroupF, Command("withdraw"))
-@router.message(GroupF, trig(WITHDRAW_TRIGGERS))
-async def cmd_withdraw(message: Message, db: Database, config: Config) -> None:
-    user = message.from_user
-    if user is None:
-        return
-    row = await db.get_user(message.chat.id, user.id)
-    balance = row["balance"] if row else 0
-    threshold = config.withdraw_threshold
-    if balance >= threshold:
-        await message.reply(
-            f"🎉 У тебя 🍬 <b>{fmt(balance)}</b> — минимум для вывода набран!\n"
-            f"📩 Напиши {config.admin_contact}, он оформит выплату и спишет "
-            f"ириски с баланса."
-        )
-    else:
-        need = threshold - balance
-        await message.reply(
-            f"📤 Вывод доступен от 🍬 {fmt(threshold)}.\n"
-            f"У тебя сейчас <b>{fmt(balance)}</b> — осталось накопить "
-            f"{fmt(need)} {iriski(need)}.\n"
-            f"Напоминаю: 1 ириска за каждые {fmt(config.messages_per_iriska)} "
-            f"сообщений 😉"
-        )
-
-
 @router.message(GroupF, Command("hours"))
 @router.message(GroupF, trig(HOURS_TRIGGERS))
 async def cmd_hours(message: Message, config: Config) -> None:
@@ -204,7 +169,6 @@ async def cmd_help(message: Message, config: Config) -> None:
     await message.reply(
         help_text(
             per=config.messages_per_iriska,
-            threshold=config.withdraw_threshold,
             min_len=config.min_msg_len,
             cooldown=config.cooldown_seconds,
             contact=config.admin_contact,
@@ -243,3 +207,4 @@ async def cmd_id(message: Message) -> None:
             f"<code>{target.id}</code>"
         )
     await message.reply("\n".join(lines))
+

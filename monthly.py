@@ -1,4 +1,4 @@
-"""Завершение месячного цикла статистики и сгорание ирисок."""
+"""Завершение месячного рейтинга без потери игровой валюты."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def monthly_summary_text(period: str, snapshot: dict) -> str:
     lines.extend(
         [
             "",
-            "🔥 <b>Месячная статистика обнулена, все накопленные ириски сгорели.</b>",
+            "🍬 <b>Начался новый рейтинг. Все ириски и игровой прогресс сохранены.</b>",
             "🌱 Начинается новый месяц — приятного общения и новых побед! 🍬",
         ]
     )
@@ -139,3 +139,4 @@ async def monthly_stats_announcer(bot: Bot, db: Database, config: Config) -> Non
         except Exception:
             logger.exception("Ошибка завершения месячной статистики")
         await asyncio.sleep(15)
+

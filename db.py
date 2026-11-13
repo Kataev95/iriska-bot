@@ -152,7 +152,10 @@ CREATE INDEX IF NOT EXISTS idx_pet_events_open ON pet_events (status, expires_ts
 """
 
 
-class Database:
+from pet_game_db import PetGameDatabase
+
+
+class Database(PetGameDatabase):
     """Одно соединение + asyncio-lock на запись: для чата этого более чем достаточно."""
 
     def __init__(self, path: str) -> None:
@@ -169,6 +172,7 @@ class Database:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(SCHEMA)
         await self._migrate()
+        await self._migrate_pet_game()
         await self._db.commit()
 
     async def _migrate(self) -> None:
@@ -451,7 +455,7 @@ class Database:
     async def close_stats_period(
         self, expected_period: str, next_period: str, now_ts: float,
     ) -> list[dict] | None:
-        """Снимает месячные итоги и атомарно обнуляет статистику и балансы.
+        """Снимает месячные итоги и обнуляет только рейтинг сообщений.
 
         Возвращает снимки по чатам. Если другой вызов уже закрыл этот период,
         возвращает None — это защищает от повторного анонса после рестарта.
@@ -487,18 +491,8 @@ class Database:
                     {"chat_id": chat_id, "top": top, "totals": totals}
                 )
 
-            # Сгорание остаётся в журнале, чтобы экономику можно было проверить.
-            await db.execute(
-                "INSERT INTO ledger (chat_id, user_id, amount, reason) "
-                "SELECT chat_id, user_id, -balance, 'ежемесячное сгорание' "
-                "FROM users WHERE balance > 0"
-            )
-            await db.execute(
-                "UPDATE users SET total_counted = 0, balance = 0, earned_total = 0, "
-                "progress = 0, last_counted_ts = 0, last_msg_hash = NULL, "
-                "last_bonus_day = NULL, bonus_streak = 0, "
-                "bonus_claimed_ts = 0, bonus_claimed_amount = 0"
-            )
+            # Сбрасываем только месячный рейтинг. Валюта, бонусы и прогресс постоянны.
+            await db.execute("UPDATE users SET total_counted = 0")
             await db.execute("DELETE FROM daily_stats")
             await db.execute(
                 "UPDATE duels SET status = 'cancelled', resolved_ts = ? "
@@ -1422,7 +1416,7 @@ class Database:
                     "last_fed_day = ?, lost_streak = 0, lost_ts = 0 WHERE id = ?",
                     (day, streak, best, day, row["id"]),
                 )
-                reward = int((rewards or {}).get(streak, 0))
+                reward = int((rewards or {}).get(streak, 0)) if streak > prev_best else 0
                 if reward > 0:
                     for uid in (a, b):
                         await db.execute(
@@ -1607,7 +1601,7 @@ class Database:
     async def pets_for_events(self) -> list[aiosqlite.Row]:
         """Живые вылупившиеся питомцы с идущей серией."""
         cur = await self._require().execute(
-            "SELECT * FROM pets WHERE status = 'active' AND streak > 0 ORDER BY id"
+            "SELECT * FROM pets WHERE status = 'active' AND best_streak > 0 ORDER BY id"
         )
         return list(await cur.fetchall())
 
@@ -1755,7 +1749,7 @@ class Database:
     async def top_pets(self, chat_id: int, limit: int = 10) -> list[aiosqlite.Row]:
         cur = await self._require().execute(
             "SELECT * FROM pets WHERE chat_id = ? AND status = 'active' "
-            "AND best_streak > 0 ORDER BY streak DESC, best_streak DESC, id LIMIT ?",
+            "AND best_streak > 0 ORDER BY xp DESC, best_streak DESC, id LIMIT ?",
             (chat_id, limit),
         )
         return list(await cur.fetchall())
@@ -1770,3 +1764,4 @@ class Database:
             (chat_id, *user_ids),
         )
         return {int(r["user_id"]): r for r in await cur.fetchall()}
+

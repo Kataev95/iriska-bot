@@ -52,7 +52,7 @@ def place(i: int) -> str:
 
 
 def help_text(
-    per: int, threshold: int, min_len: int, cooldown: float,
+    per: int, min_len: int, cooldown: float,
     contact: str, hours_line: str = "", dedupe: bool = True,
     bonus_for: str = "", shop: bool = False, bonus_watch: str = "",
     pets: bool = False,
@@ -80,8 +80,7 @@ def help_text(
             "идёт быстрее! Подробнее: /hours\n\n"
             if hours_line else ""
         )
-        + f"<b>Вывод:</b> накопил <b>{fmt(threshold)}</b> {iriski(threshold)} — "
-        f"пиши {contact} и забирай.\n\n"
+        + "Ириски тратятся только внутри бота и не сгорают в конце месяца.\n\n"
         "<b>Команды:</b>\n"
         "/me — моя статистика (или напиши «стата»)\n"
         "/balance — баланс ирисок («баланс»)\n"
@@ -96,7 +95,6 @@ def help_text(
            "/pettop — топ питомцев («топ питомцев»)\n" if pets else "")
         + ("/shop — магазин за ириски («магазин»)\n" if shop else "")
         + "/hours — бонусные часы («бонусные часы»)\n"
-        "/withdraw — вывод ирисок («вывод»)\n"
         "/help — эта справка\n\n"
         "🎮 Дуэль: ответь «дуэль 10» на сообщение соперника — монетка решит, "
         "кто заберёт банк.\n"
@@ -109,9 +107,10 @@ def help_text(
         )
         + (
             "\n🐣 Питомец: ответь «питомец» на сообщение друга и пишите друг "
-            "другу каждый день — питомец растёт, пока серия не прервётся "
+            "другу, отправляйте в приключения — уровень и вещи сохраняются. "
             "Кормите, играйте, покупайте аксессуары и ловите события "
             "(«мой питомец», «как растить питомца»)."
             if pets else ""
         )
     )
+

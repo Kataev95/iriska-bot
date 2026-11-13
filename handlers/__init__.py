@@ -1,3 +1,4 @@
+from .pet_game import router as pet_game_router
 from .admin_cmds import router as admin_router
 from .counting import router as counting_router
 from .games import router as games_router
@@ -17,3 +18,4 @@ __all__ = [
     "pet_menu_router",
     "counting_router",
 ]
+

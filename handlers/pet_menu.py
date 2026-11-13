@@ -63,6 +63,7 @@ from pet_care import (
     stats_lines,
     worn_line,
 )
+from pet_game import growth_days, level_for, next_level_xp
 from pets import next_stage, pet_name, pet_title, species_by_code, stage_line
 from texts import days, fmt, iriski
 
@@ -80,33 +81,19 @@ def local_now(config: Config, now_ts: float | None = None) -> datetime:
 async def refresh_care(db: Database, pet, config: Config, now_ts: float | None = None):
     """Пересчитать шкалы на текущий момент и сохранить."""
     now_ts = now_ts if now_ts is not None else time.time()
-    if float(pet["care_ts"] or 0) <= 0:
-        return await db.update_pet(int(pet["id"]), care_ts=now_ts)
-    food, joy, energy = decay(
-        float(pet["food"]), float(pet["joy"]), float(pet["energy"]),
-        float(pet["care_ts"]), now_ts, config.tz, bool(pet["house"]),
-    )
-    return await db.update_pet(
-        int(pet["id"]), food=food, joy=joy, energy=energy, care_ts=now_ts
-    )
+    return await db.game_refresh(int(pet["id"]), now_ts, config.tz)
 
 
 async def add_care(
     db: Database, pet, config: Config,
     food: float = 0, joy: float = 0, energy: float = 0,
 ):
-    pet = await refresh_care(db, pet, config)
-    return await db.update_pet(
-        int(pet["id"]),
-        food=clamp(float(pet["food"]) + food),
-        joy=clamp(float(pet["joy"]) + joy),
-        energy=clamp(float(pet["energy"]) + energy),
-    )
+    return await db.game_refresh(int(pet["id"]), time.time(), config.tz, food, joy, energy)
 
 
 async def chat_feeds_pet(db: Database, pet, config: Config) -> None:
     """Каждое сообщение пары друг другу немного кормит и радует питомца."""
-    if pet is None or pet["status"] != "active" or int(pet["streak"]) <= 0:
+    if pet is None or pet["status"] != "active" or int(pet["best_streak"]) <= 0:
         return
     await add_care(db, pet, config, food=CHAT_FOOD, joy=CHAT_JOY)
 
@@ -228,26 +215,17 @@ def card_caption(pet, names: dict, config: Config, viewer: int | None = None,
     if best <= 0:
         lines.append("🥚 Яйцо ждёт первого дня переписки.")
         lines.append("Напишите сегодня друг другу (ответом или @упоминанием) — и он вылупится!")
-    elif streak <= 0:
-        lost = int(pet["lost_streak"])
-        if lost > 0:
-            lines.append(f"💔 Сбежал! Серия {lost} {days(lost)} сгорела.")
-            if config.pet_restore_hours > 0:
-                lines.append(
-                    f"🩹 Вернуть можно за {fmt(config.pet_restore_price)} 🍬 "
-                    f"в течение {config.pet_restore_hours:g} ч после побега."
-                )
-        else:
-            lines.append("💔 Убежал. Напишите друг другу — и он вернётся малышом.")
     else:
         lines.append(
-            f"{stage_line(streak)} • 🔥 Серия <b>{streak}</b> {days(streak)}"
+            f"{stage_line(growth_days(pet))} • 🔥 Серия <b>{streak}</b> {days(streak)}"
             + (f" (рекорд {best})" if best > streak else "")
         )
-        nxt = next_stage(streak)
-        if nxt is not None:
-            left = nxt.min_streak - streak
-            lines.append(f"До «{nxt.title}» {nxt.badge}: {left} {days(left)}")
+        xp = int(pet["xp"])
+        level = level_for(xp)
+        target = next_level_xp(xp)
+        lines.append(f"⭐ Уровень {level}/20 • {xp} XP")
+        lines.append(f"До уровня {level + 1}: {target - xp} XP" if target else "🏆 Максимальный уровень")
+        lines.append("🧭 Приключения дают опыт и ириски. Прогресс не сгорает.")
         lines.append("")
         lines.extend(stats_lines(float(pet["food"]), float(pet["joy"]), float(pet["energy"])))
         lines.append(mood_text(float(pet["food"]), float(pet["joy"]),
@@ -280,7 +258,7 @@ def card_key(pet, config: Config, force: str | None = None) -> str:
         if today in (pet["a_day"], pet["b_day"]):
             return "egg_hatching"  # один уже написал — яйцо трескается
     return image_key(
-        pet["species"], int(pet["streak"]), int(pet["best_streak"]),
+        pet["species"], growth_days(pet), int(pet["best_streak"]),
         float(pet["food"]), float(pet["joy"]), float(pet["energy"]),
         local_now(config).hour, force,
     )
@@ -293,21 +271,19 @@ def _cb(action: str, pet_id: int, arg: str = "") -> str:
 def main_keyboard(pet, config: Config, many: bool) -> InlineKeyboardMarkup:
     pid = int(pet["id"])
     rows: list[list[InlineKeyboardButton]] = []
-    if int(pet["best_streak"]) > 0 and int(pet["streak"]) > 0:
+    if int(pet["best_streak"]) > 0:
         rows.append([
             InlineKeyboardButton(text=a.button, callback_data=_cb(a.code, pid))
             for a in ACTIONS.values()
         ])
         rows.append([
+            InlineKeyboardButton(text="🧭 Приключения", callback_data=f"pg:menu:{pid}"),
+            InlineKeyboardButton(text="📋 Задания", callback_data=f"pg:tasks:{pid}"),
+        ])
+        rows.append([
             InlineKeyboardButton(text="🛒 Магазин", callback_data=_cb("shop", pid)),
             InlineKeyboardButton(text="🎀 Гардероб", callback_data=_cb("wardrobe", pid)),
         ])
-    elif int(pet["best_streak"]) > 0 and int(pet["lost_streak"]) > 0 \
-            and config.pet_restore_hours > 0:
-        rows.append([InlineKeyboardButton(
-            text=f"🩹 Вернуть — {fmt(config.pet_restore_price)} 🍬",
-            callback_data=_cb("restore", pid),
-        )])
     nav = []
     if many:
         nav.append(InlineKeyboardButton(text="◀️", callback_data=_cb("nav", pid, "-1")))
@@ -407,7 +383,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
     if pet is None:
         await message.reply(rules_text(config))
         return
-    pet = await refresh_care(db, pet, config)
+    pet = await refresh_care(db, pet, config, local_now(config).timestamp())
     names = await _names(db, pet)
     await send_pet_photo(
         message.bot, db, message.chat.id, card_key(pet, config),
@@ -470,8 +446,8 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
         await _edit_card(message, db, card_key(pet_row, config),
                          wardrobe_caption(pet_row, note), wardrobe_keyboard(pet_row))
 
-    pet = await refresh_care(db, pet, config)
-    alive = int(pet["best_streak"]) > 0 and int(pet["streak"]) > 0
+    pet = await refresh_care(db, pet, config, local_now(config).timestamp())
+    alive = int(pet["best_streak"]) > 0
 
     if action == "main":
         await show_main(pet)
@@ -491,36 +467,13 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
         return
 
     if action in ACTIONS:
-        if not alive:
-            await callback.answer("Сначала питомец должен вылупиться и быть дома 🥚",
-                                  show_alert=True)
+        note = await db.game_care(pet_id, user.id, action, local_now(config).timestamp(), config.tz)
+        if not note.startswith(("✅", "💕")):
+            await callback.answer(note, show_alert=True)
             return
-        act = ACTIONS[action]
-        hour = local_now(config).hour
-        refusal = check_action(action, float(pet["food"]), float(pet["joy"]),
-                               float(pet["energy"]), hour)
-        if refusal:
-            await callback.answer(refusal, show_alert=True)
-            return
-        now = time.time()
-        last = await db.get_pet_action(pet_id, user.id, action)
-        if now - last < act.cooldown:
-            await callback.answer(
-                f"Снова можно через {wait_text(act.cooldown - (now - last))} ⏳",
-                show_alert=True,
-            )
-            return
-        partner = pet["user_b"] if pet["user_a"] == user.id else pet["user_a"]
-        together = now - await db.get_pet_action(pet_id, partner, action) <= TOGETHER_WINDOW
-        await db.set_pet_action(pet_id, user.id, action, now)
-        pet = await add_care(db, pet, config, food=act.food,
-                             joy=act.joy + (TOGETHER_JOY if together else 0),
-                             energy=act.energy)
-        note = f"{pet_name(pet)} {act.done}"
-        if together:
-            note += f"\n💕 Вы позаботились вдвоём — +{TOGETHER_JOY} настроения!"
-        await show_main(pet, note, force="sleep" if action == "sleep" else "happy")
-        await callback.answer("💕 Вместе!" if together else "Готово!")
+        pet = await db.get_pet(pet_id)
+        await show_main(pet, note)
+        await callback.answer()
         return
 
     if action == "shop":
@@ -534,96 +487,23 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
         return
 
     if action == "buy":
-        item = SHOP_BY_CODE.get(arg)
-        if item is None:
-            await callback.answer()
+        note = await db.game_buy(pet_id, user.id, arg, time.time(), config.tz)
+        if not note.startswith("✅"):
+            await callback.answer(note, show_alert=True)
             return
-        if not alive:
-            await callback.answer("Покупки — когда питомец вылупится и будет дома 🥚",
-                                  show_alert=True)
-            return
-        owned = parse_set(pet["items"])
-        if item.kind == "wear" and item.code in owned:
-            await callback.answer("Уже есть — надеть можно в гардеробе 🎀", show_alert=True)
-            return
-        if item.kind == "house" and int(pet["house"]):
-            await callback.answer("Домик уже стоит 🏠", show_alert=True)
-            return
-        if item.kind == "freeze" and int(pet["freezes"]) >= FREEZE_MAX:
-            await callback.answer(f"Больше {FREEZE_MAX} заморозок не хранится 🧊",
-                                  show_alert=True)
-            return
-        if item.kind == "food" and float(pet["food"]) >= 95:
-            await callback.answer("Он сыт — угощение подождёт 🙂", show_alert=True)
-            return
-        status, balance = await db.adjust_balance(
-            pet["chat_id"], user.id, -item.price, f"питомец: {item.title}", None
-        )
-        if status == "not_found":
-            await db.ensure_user(pet["chat_id"], user.id, user.username, user.first_name)
-            status, balance = await db.adjust_balance(
-                pet["chat_id"], user.id, -item.price, f"питомец: {item.title}", None
-            )
-        if status != "ok":
-            await callback.answer(
-                f"Не хватает ирисок: нужно {item.price} 🍬, у тебя {fmt(balance)}",
-                show_alert=True,
-            )
-            return
-        if item.kind == "food":
-            pet = await add_care(db, pet, config, food=item.food, joy=item.joy)
-            note = f"{item.emoji} {pet_name(pet)} съел {item.title.lower()} — ням!"
-        elif item.kind == "wear":
-            pet = await db.update_pet(
-                pet_id, items=join_set(owned + [item.code]),
-                worn=join_set(parse_set(pet["worn"]) + [item.code]),
-            )
-            note = f"{item.emoji} {item.title} куплен и сразу надет!"
-        elif item.kind == "freeze":
-            pet = await db.update_pet(pet_id, freezes=int(pet["freezes"]) + 1)
-            note = "🧊 Заморозка в запасе: пропустите день — серия не сгорит."
-        else:
-            pet = await db.update_pet(pet_id, house=1)
-            note = "🏠 Домик построен! Теперь питомцу уютнее."
-        await show_shop(pet, f"✅ {note}\nБаланс: {fmt(balance)} 🍬")
-        await callback.answer("Куплено!")
+        await show_shop(await db.get_pet(pet_id), note)
+        await callback.answer()
         return
 
     if action == "wear":
-        owned = parse_set(pet["items"])
-        if arg not in owned:
-            await callback.answer()
-            return
-        worn = parse_set(pet["worn"])
-        if arg in worn:
-            worn.remove(arg)
-        else:
-            worn.append(arg)
-        pet = await db.update_pet(pet_id, worn=join_set(worn))
-        await show_wardrobe(pet)
+        await db.game_wear(pet_id,user.id,arg)
+        await show_wardrobe(await db.get_pet(pet_id))
         await callback.answer()
         return
 
     if action == "restore":
-        status, balance, row = await db.restore_pet(
-            pet_id, user.id, max(config.pet_restore_price, 0), time.time(),
-            config.pet_restore_seconds, yesterday_day(config),
-        )
-        if status == "insufficient":
-            need = config.pet_restore_price - balance
-            await callback.answer(f"Не хватает {fmt(need)} {iriski(need)} 🍬",
-                                  show_alert=True)
-            return
-        if status == "expired":
-            await callback.answer("Поздно — окно возвращения закрылось ⌛", show_alert=True)
-        elif status == "nothing":
-            await callback.answer("Возвращать некого 🙂")
-        else:
-            await callback.answer("Вернулся! 🩹")
-        pet = await refresh_care(db, await db.get_pet(pet_id), config)
-        note = "🩹 Питомец вернулся домой! Не забудьте написать друг другу сегодня." \
-            if status == "ok" else None
-        await show_main(pet, note, force="happy" if status == "ok" else None)
+        await show_main(pet, "🏡 Питомец дома. Уровень и вещи больше не теряются из-за пропуска.")
+        await callback.answer()
         return
 
     await callback.answer()
@@ -855,3 +735,4 @@ async def on_event(callback: CallbackQuery, db: Database, config: Config) -> Non
     await callback.answer("Готово!")
     await _finish_event_message(callback.bot, ev,
                                 event_caption(pet, names, kind) + "\n\n" + result)
+

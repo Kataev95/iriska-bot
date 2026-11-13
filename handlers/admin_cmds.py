@@ -89,7 +89,7 @@ async def _give(message: Message, db: Database, row, amount: int, admin_id: int)
 
 async def _take(message: Message, db: Database, row, amount: int, admin_id: int) -> None:
     status, balance = await db.adjust_balance(
-        message.chat.id, row["user_id"], -amount, "списано админом (вывод)", admin_id
+        message.chat.id, row["user_id"], -amount, "игровая корректировка администратором", admin_id
     )
     name = display_name(row["first_name"], row["username"])
     if status == "ok":
@@ -374,6 +374,7 @@ async def cmd_pet_amnesty(
         f"💰 Начислено всего: <b>{result['total_bonus']}</b> 🍬\n"
         f"💾 Копия БД: <code>{escape(backup_path)}</code>\n"
         "Двойное начисление заблокировано. "
-        "Чтобы серия не сбежала снова, сегодня оба хозяина "
+        "Чтобы продолжить серию общения, сегодня оба хозяина "
         "должны написать друг другу."
     )
+
