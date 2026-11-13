@@ -1,0 +1,40 @@
+/* PETS WORLD 1.7: achievements and weekly chat league */
+.league-scene{display:flex;justify-content:space-around;align-items:center;height:150px;
+ border:1px solid #9bafde71;border-radius:25px;margin:10px 0 14px;font-size:38px;
+ background:linear-gradient(145deg,#2a315d 0%,#55518c 60%,#486f79 100%);
+ box-shadow:inset 0 5px 17px #ffffff1f,0 14px 30px #070e256b;}
+.league-scene span{font-size:79px;filter:drop-shadow(0 10px 12px #1919379a);}
+.league-summary{background:linear-gradient(135deg,#343b68,#274758);}
+.league-summary .row{align-items:flex-start;gap:10px;flex-wrap:wrap;}
+.league-summary .chip{white-space:normal;line-height:1.4;}
+.league-collection{background:linear-gradient(135deg,#252d4a,#222842);}
+.league-badge{display:flex;align-items:center;gap:13px;padding:13px 0;
+ border-bottom:1px solid #f6fcff14;}
+.league-badge:last-child{border-bottom:0;}
+.league-badge-icon{width:47px;height:47px;flex-shrink:0;display:grid;place-items:center;
+ background:#384161;border-radius:15px;font-size:25px;}
+.league-badge.unlocked .league-badge-icon{background:linear-gradient(130deg,#596783,#346966);}
+.league-badge.locked{opacity:.73;}
+.league-badge-main{min-width:0;flex:1;}
+.league-badge-main strong{display:block;font-size:13px;line-height:1.35;}
+.league-badge-main small{display:block;font-size:11px;color:#afbdd6;margin-top:4px;line-height:1.4;}
+.league-badge-status{font-size:17px;align-self:center;}
+.league-badge-progress{height:6px;margin:10px 0 4px;}
+.league-badge-counter{font-size:10px;color:#8ce4d2;}
+.league-leaderboard{background:linear-gradient(135deg,#292c4c,#203347);}
+.league-mine{border-radius:11px;background:#1b61556d;color:#a9f1d8;
+ font-size:12px;font-weight:800;padding:10px;margin:12px 0;}
+.league-rank-row{display:flex;align-items:center;gap:10px;padding:13px 3px;
+ border-bottom:1px solid #f5faff13;}
+.league-rank-row:last-child{border-bottom:0;}
+.league-rank-row.mine{background:#30706345;border-radius:13px;padding:12px 9px;}
+.league-rank-place{flex-shrink:0;font-size:14px;min-width:52px;color:#f5db9b;font-weight:800;}
+.league-rank-name{flex:1;min-width:0;}
+.league-rank-name strong{font-size:13px;display:block;word-break:break-word;}
+.league-rank-name small{display:block;color:#b1c2dc;font-size:10px;margin-top:3px;}
+.league-rank-score{font-size:17px;color:#88eed2;font-weight:900;text-align:right;}
+.league-rank-score small{display:block;color:#a4b7d4;font-size:10px;font-weight:500;}
+.league-loading{text-align:center;padding:30px 12px;}
+.league-loading .spinner{margin:0 auto;}
+.league-link{background:linear-gradient(120deg,#42416f,#33555b);}
+.league-link .h2{margin:0;}

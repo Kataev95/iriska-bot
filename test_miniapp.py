@@ -469,6 +469,21 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"pet_id":1,"kind":"market_buy","listing_id":999999})
         self.assertIn("закрыто",(await forged.json())["message"])
 
+    async def test_league_auth_read_only(self):
+        missing=await self.client.get("/api/league/1")
+        self.assertEqual(missing.status,401)
+        alien=await self.client.get("/api/league/1",
+            headers={"X-Telegram-Init-Data":signed(201)})
+        self.assertEqual(alien.status,403)
+        before=await self.db.get_user(CHAT_ID,101)
+        response=await self.client.get("/api/league/1",headers=self.headers)
+        self.assertEqual(response.status,200)
+        info=await response.json()
+        self.assertIsInstance(info,dict)
+        after=await self.db.get_user(CHAT_ID,101)
+        self.assertEqual(before["balance"],after["balance"])
+        self.assertEqual(before["earned_total"],after["earned_total"])
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -508,7 +523,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=5", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=8", html)
+        self.assertIn("/static/app.js?v=9", html)
+        self.assertIn("/static/league.js?v=1", html)
+        self.assertIn("/static/league.css?v=1", html)
         self.assertIn("/static/market.css?v=1", html)
         self.assertIn("/static/market.js?v=1", html)
         self.assertIn("/static/business.css?v=1", html)
@@ -550,6 +567,9 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('data-market-buy=', (static/"market.js").read_text(encoding="utf-8"))
         self.assertIn('data-market-post=', (static/"market.js").read_text(encoding="utf-8"))
         self.assertIn('market-scene', (static/"market.css").read_text(encoding="utf-8"))
+        self.assertIn('window.PetsLeague.renderLeague', js)
+        self.assertIn('league-scene', (static/"league.css").read_text(encoding="utf-8"))
+        self.assertIn('league-rank-row', (static/"league.js").read_text(encoding="utf-8"))
 
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
@@ -558,7 +578,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("app.js", "house.js", "business.js", "market.js"):
+        for name in ("app.js", "house.js", "business.js", "market.js", "league.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)

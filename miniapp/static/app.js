@@ -27,7 +27,8 @@ syncSafeArea();
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
              group: "food", busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
-             returnTab: "home", market: null, marketLoading:false, marketFetchedAt:0,
+             returnTab: "home", league: null, leagueLoading:false, leagueFetchedAt:0, leagueRequest:0,
+             market: null, marketLoading:false, marketFetchedAt:0,
              marketRequest:0, marketSelection:{kind:"material",code:"leaf",quantity:1,price:2} };
 const tabs = [
   ["home","🏠","Главная"], ["trips","🧭","Походы"],
@@ -265,6 +266,9 @@ function home(p) {
     '<p class="subtitle">'+(p.businesses?.starts_remaining ?? 4)+' производства осталось сегодня · '+
     '🍬 '+(p.businesses?.sales_coins_remaining ?? 12)+' к продаже</p></div>'+
     '<button class="btn btn-primary" data-click="business">Открыть →</button></div></div>'+
+    '<div class="panel league-link"><div class="row"><div><div class="h2">🏆 Лига питомцев</div>'+
+    '<p class="subtitle">Достижения и еженедельный рейтинг вашего чата</p></div>'+
+    '<button class="btn btn-primary" data-click="league">Открыть →</button></div></div>'+
     '<div class="panel market-link"><div class="row"><div><div class="h2">🛒 Рынок питомцев</div>'+
     '<p class="subtitle">Покупайте и продавайте предметы в вашем Telegram-чате</p></div>'+
     '<button class="btn btn-primary" data-click="market">Открыть →</button></div></div>'+
@@ -380,7 +384,8 @@ function growth(p) {
     '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="house">🏡 Мой дом →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Бизнесы и производство →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="market">🛒 Рынок и торговля →</button>';
+    '<button class="btn btn-quiet btn-wide" data-click="market">🛒 Рынок и торговля →</button>'+
+    '<button class="btn btn-quiet btn-wide" data-click="league">🏆 Достижения и рейтинги →</button>';
 }
 function inventory(p) {
   const stock = p.materials || {};
@@ -425,6 +430,7 @@ function inventory(p) {
       'Пока они не дают бонусов к XP или ирискам.</p>'+recipes+
     '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Предприятия и товары →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="market">🛒 Торговая площадка →</button>'+
+    '<button class="btn btn-quiet btn-wide" data-click="league">🏆 Лига питомцев →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="inventory-back">← Назад</button>';
 }
 
@@ -448,13 +454,14 @@ function render() {
   wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
   nav.classList.remove("hidden");
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
-    (ui.tab===id || ['wardrobe','inventory','house','business','market'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
+    (ui.tab===id || ['wardrobe','inventory','house','business','market','league'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
   app.innerHTML=renderPicker()+({
     home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow()),
     market: p => window.PetsMarket.renderMarket(
-      ui.market,p,ui.config,ui.marketSelection,serverNow())
+      ui.market,p,ui.config,ui.marketSelection,serverNow()),
+    league: p => window.PetsLeague.renderLeague(ui.league,p,serverNow())
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
@@ -476,6 +483,7 @@ async function loadPet(id) {
     ui.selected = id;
     ui.picker = false;
     ui.market=null; ui.marketFetchedAt=0; ++ui.marketRequest;
+    ui.league=null; ui.leagueFetchedAt=0; ++ui.leagueRequest;
     setPet(pet);
   } finally {ui.syncing = false;}
 }
@@ -508,6 +516,21 @@ async function loadMarket({force=false,quiet=true}={}) {
     if(!quiet) showToast(e.message);
   } finally {ui.marketLoading=false;}
 }
+async function loadLeague({force=false,quiet=true}={}) {
+  if(!ui.selected || !TG?.initData || document.hidden || (ui.leagueLoading&&!force)) return;
+  if(!force && ui.league && Date.now()-ui.leagueFetchedAt<60000) return;
+  const id=ui.selected, serial=++ui.leagueRequest;
+  ui.leagueLoading=true;
+  try {
+    const data=await api('/api/league/'+id);
+    if(serial===ui.leagueRequest&&ui.selected===id) {
+      ui.league=data;ui.leagueFetchedAt=Date.now();
+      if(ui.tab==='league') render();
+    }
+  } catch(e) {
+    if(!quiet) showToast(e.message);
+  } finally {ui.leagueLoading=false;}
+}
 function syncBackButton() {
   try {
     if (ui.tab !== "home" || !modal.classList.contains("hidden")) TG?.BackButton?.show();
@@ -515,7 +538,7 @@ function syncBackButton() {
   } catch {}
 }
 function goToTab(tab) {
-  if (["wardrobe","inventory","house","business","market"].includes(tab) && !["wardrobe","inventory","house","business","market"].includes(ui.tab)) {
+  if (["wardrobe","inventory","house","business","market","league"].includes(tab) && !["wardrobe","inventory","house","business","market","league"].includes(ui.tab)) {
     ui.returnTab = ui.tab;
   }
   ui.tab = tab;
@@ -523,6 +546,7 @@ function goToTab(tab) {
   syncBackButton();
   window.scrollTo(0,0);
   if(tab==="market") loadMarket();
+  if(tab==="league") loadLeague();
 }
 function closeModal() {
   modal.classList.add("hidden");
@@ -530,13 +554,14 @@ function closeModal() {
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
-  else if (["wardrobe","inventory","house","business","market"].includes(ui.tab)) goToTab(ui.returnTab || "home");
+  else if (["wardrobe","inventory","house","business","market","league"].includes(ui.tab)) goToTab(ui.returnTab || "home");
   else if (ui.tab !== "home") goToTab("home");
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
 document.addEventListener("keydown", e => {if(e.key === "Escape") goBack();});
 function syncTimers() {
   if (!ui.pet || ui.busy) return;
+  if(ui.tab==='league') loadLeague();
   if(ui.tab==="market") {
     for(const badge of app.querySelectorAll("[data-market-expiry]")) {
       badge.textContent="⏳ "+window.PetsMarket.duration(Number(badge.dataset.marketExpires)-serverNow());
@@ -633,6 +658,9 @@ document.addEventListener("click", async e=>{
   if (target.dataset.click==="business-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.click==="market") {tap();goToTab("market");return;}
   if (target.dataset.click==="market-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.click==="league") {tap();goToTab("league");return;}
+  if (target.dataset.click==="league-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.leagueRefresh) {await loadLeague({force:true,quiet:false});return;}
   if (target.dataset.marketRefresh) {await loadMarket({force:true,quiet:false});return;}
   if (target.dataset.marketKind) {
     const kind=target.dataset.marketKind;
@@ -825,6 +853,7 @@ document.addEventListener("visibilitychange", () => {
   if(!document.hidden) {
     refreshPet();
     if(ui.tab==="market") loadMarket({force:true});
+    if(ui.tab==="league") loadLeague({force:true});
   }
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
