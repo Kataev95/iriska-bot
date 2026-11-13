@@ -57,9 +57,9 @@ class InitDataTests(unittest.TestCase):
 
         # Do not accept removing/replacing a field that was HMAC signed.
         with self.assertRaises(Unauthorized):
-            validate_init_data(raw.replace("signature=", "signature=modified"))
+            validate_init_data(raw.replace("signature=", "signature=modified"), TOKEN)
         with self.assertRaises(Unauthorized):
-            validate_init_data(raw.replace("&signature=TelegramEd25519SampleBase64url-_", ""))
+            validate_init_data(raw.replace("&signature=TelegramEd25519SampleBase64url-_", ""), TOKEN)
 
         # Both old (no signature) and new (with signature) Telegram
         # client versions must work. The unsigned tokens stay invalid.
