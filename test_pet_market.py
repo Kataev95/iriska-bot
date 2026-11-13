@@ -156,7 +156,7 @@ class MarketGameTests(unittest.IsolatedAsyncioTestCase):
         listing=(await self.latest())["id"]
         self.assertIsNone(await self.state(pet=1,user=201))
         self.assertIsNone(await self.state(pet=4,user=201))
-        self.assertIn("недоступен",await self.db.buy_market_listing(
+        self.assertIn("закрыто",await self.db.buy_market_listing(
             4,401,listing,NOW+1,TZ))
         self.assertIn("общими хозяевами",await self.db.buy_market_listing(
             3,101,listing,NOW+1,TZ))
