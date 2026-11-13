@@ -27,7 +27,8 @@ syncSafeArea();
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
              group: "food", busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
-             returnTab: "home" };
+             returnTab: "home", market: null, marketLoading:false, marketFetchedAt:0,
+             marketRequest:0, marketSelection:{kind:"material",code:"leaf",quantity:1,price:2} };
 const tabs = [
   ["home","🏠","Главная"], ["trips","🧭","Походы"],
   ["tasks","📋","Задания"], ["shop","🛍","Магазин"],
@@ -184,6 +185,11 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect("🍬 +"+(after.balance-before.balance)+" ирисок!", "reward");
     return;
   }
+  if (kind.startsWith("market_") && message.startsWith("✅")) {
+    playEffect(kind==="market_create"?"📣 Объявление размещено":kind==="market_buy"?
+       "🛍 Сделка совершена!":"↩️ Товары возвращены",kind==="market_buy"?"reward":"care");
+    return;
+  }
   let success = false;
   if (kind === "claim") {
     success = Boolean(before.trip && !after.trip);
@@ -259,6 +265,9 @@ function home(p) {
     '<p class="subtitle">'+(p.businesses?.starts_remaining ?? 4)+' производства осталось сегодня · '+
     '🍬 '+(p.businesses?.sales_coins_remaining ?? 12)+' к продаже</p></div>'+
     '<button class="btn btn-primary" data-click="business">Открыть →</button></div></div>'+
+    '<div class="panel market-link"><div class="row"><div><div class="h2">🛒 Рынок питомцев</div>'+
+    '<p class="subtitle">Покупайте и продавайте предметы в вашем Telegram-чате</p></div>'+
+    '<button class="btn btn-primary" data-click="market">Открыть →</button></div></div>'+
     '<div class="panel backpack-link"><div class="row"><div><div class="h2">🎒 Общий рюкзак</div>'+
     '<p class="subtitle">'+(p.crafts||[]).length+' сувениров · '+
     ui.config.materials.reduce((sum,m)=>sum+resourceQuantity(p,m.code),0)+' материалов</p></div>'+
@@ -370,7 +379,8 @@ function growth(p) {
     )+'</div><button class="btn btn-wide" data-click="wardrobe">🎀 Гардероб →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="house">🏡 Мой дом →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Бизнесы и производство →</button>';
+    '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Бизнесы и производство →</button>'+
+    '<button class="btn btn-quiet btn-wide" data-click="market">🛒 Рынок и торговля →</button>';
 }
 function inventory(p) {
   const stock = p.materials || {};
@@ -414,6 +424,7 @@ function inventory(p) {
     '<p class="section-lead">Создавайте коллекционные сувениры из найденных вещей. '+
       'Пока они не дают бонусов к XP или ирискам.</p>'+recipes+
     '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Предприятия и товары →</button>'+
+    '<button class="btn btn-quiet btn-wide" data-click="market">🛒 Торговая площадка →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="inventory-back">← Назад</button>';
 }
 
@@ -437,11 +448,13 @@ function render() {
   wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
   nav.classList.remove("hidden");
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
-    (ui.tab===id || ['wardrobe','inventory','house','business'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
+    (ui.tab===id || ['wardrobe','inventory','house','business','market'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
   app.innerHTML=renderPicker()+({
     home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
-    business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow())
+    business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow()),
+    market: p => window.PetsMarket.renderMarket(
+      ui.market,p,ui.config,ui.marketSelection,serverNow())
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
@@ -462,6 +475,7 @@ async function loadPet(id) {
     if (serial !== ui.syncSerial) return;
     ui.selected = id;
     ui.picker = false;
+    ui.market=null; ui.marketFetchedAt=0; ++ui.marketRequest;
     setPet(pet);
   } finally {ui.syncing = false;}
 }
@@ -479,6 +493,21 @@ async function refreshPet({force=false,quiet=true} = {}) {
   } catch(e) {if(!quiet) showToast(e.message);}
   finally {ui.syncing = false;}
 }
+async function loadMarket({force=false,quiet=true}={}) {
+  if(!ui.selected || !TG?.initData || document.hidden || ui.marketLoading) return;
+  if(!force && ui.market && Date.now()-ui.marketFetchedAt<60000) return;
+  const id=ui.selected, serial=++ui.marketRequest;
+  ui.marketLoading=true;
+  try {
+    const result=await api('/api/market/'+id);
+    if(serial===ui.marketRequest && ui.selected===id) {
+      ui.market=result; ui.marketFetchedAt=Date.now();
+      if(ui.tab==="market") render();
+    }
+  } catch(e) {
+    if(!quiet) showToast(e.message);
+  } finally {ui.marketLoading=false;}
+}
 function syncBackButton() {
   try {
     if (ui.tab !== "home" || !modal.classList.contains("hidden")) TG?.BackButton?.show();
@@ -486,13 +515,14 @@ function syncBackButton() {
   } catch {}
 }
 function goToTab(tab) {
-  if (["wardrobe","inventory","house","business"].includes(tab) && !["wardrobe","inventory","house","business"].includes(ui.tab)) {
+  if (["wardrobe","inventory","house","business","market"].includes(tab) && !["wardrobe","inventory","house","business","market"].includes(ui.tab)) {
     ui.returnTab = ui.tab;
   }
   ui.tab = tab;
   render();
   syncBackButton();
   window.scrollTo(0,0);
+  if(tab==="market") loadMarket();
 }
 function closeModal() {
   modal.classList.add("hidden");
@@ -500,13 +530,19 @@ function closeModal() {
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
-  else if (["wardrobe","inventory","house","business"].includes(ui.tab)) goToTab(ui.returnTab || "home");
+  else if (["wardrobe","inventory","house","business","market"].includes(ui.tab)) goToTab(ui.returnTab || "home");
   else if (ui.tab !== "home") goToTab("home");
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
 document.addEventListener("keydown", e => {if(e.key === "Escape") goBack();});
 function syncTimers() {
   if (!ui.pet || ui.busy) return;
+  if(ui.tab==="market") {
+    for(const badge of app.querySelectorAll("[data-market-expiry]")) {
+      badge.textContent="⏳ "+window.PetsMarket.duration(Number(badge.dataset.marketExpires)-serverNow());
+    }
+    loadMarket();
+  }
   if(ui.tab==="business") {
     for(const label of app.querySelectorAll("[data-business-countdown]")) {
       const code=label.dataset.businessCountdown;
@@ -568,6 +604,10 @@ async function perform(kind, code="", extra={}) {
     if (ui.selected === id) {
       setPet(result.pet);
       showActionEffect(kind, code, before, result.pet, result.message);
+      if(kind.startsWith("market_")) {
+        ui.market=null;ui.marketFetchedAt=0;
+        await loadMarket({force:true,quiet:false});
+      }
     }
     showToast(result.message);
     if (result.message.startsWith("✅") || result.message.startsWith("💕")) haptic("success");
@@ -591,6 +631,73 @@ document.addEventListener("click", async e=>{
   if (target.dataset.click==="house-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.click==="business") {tap();goToTab("business");return;}
   if (target.dataset.click==="business-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.click==="market") {tap();goToTab("market");return;}
+  if (target.dataset.click==="market-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.marketRefresh) {await loadMarket({force:true,quiet:false});return;}
+  if (target.dataset.marketKind) {
+    const kind=target.dataset.marketKind;
+    if(kind==="material"||kind==="good") {
+      ui.marketSelection.kind=kind;
+      ui.marketSelection.code=kind==="material"?ui.config.materials[0]?.code:
+        ui.config.businesses[0]?.code;
+      render();
+    }
+    return;
+  }
+  if (target.dataset.marketCode) {
+    const code=target.dataset.marketCode;
+    if(window.PetsMarket.allItems(ui.config).some(i=>
+       i.kind===ui.marketSelection.kind&&i.code===code)) {
+      ui.marketSelection.code=code;render();
+    }
+    return;
+  }
+  if (target.dataset.marketQuantity) {
+    const qty=Number(target.dataset.marketQuantity);
+    if([1,2,3,5].includes(qty)) {ui.marketSelection.quantity=qty;render();}
+    return;
+  }
+  if (target.dataset.marketPrice) {
+    const price=Number(target.dataset.marketPrice);
+    if([1,2,3,5,8,13,20].includes(price)) {ui.marketSelection.price=price;render();}
+    return;
+  }
+  if (target.dataset.marketPost) {
+    const selected=window.PetsMarket.allItems(ui.config).find(i=>
+      i.kind===ui.marketSelection.kind&&i.code===ui.marketSelection.code);
+    if(selected) {
+      const qty=ui.marketSelection.quantity,price=ui.marketSelection.price;
+      confirmDialog("Разместить предложение?",
+        selected.icon+" "+selected.name+" ×"+qty+" за "+(qty*price)+" 🍬. "+
+        "Предметы будут зарезервированы на 48 часов. Ириски получит автор объявления.",
+        ()=>perform("market_create",selected.code,
+          {item_kind:selected.kind,quantity:qty,unit_price:price}));
+    }
+    return;
+  }
+  if (target.dataset.marketCancel) {
+    const id=Number(target.dataset.marketCancel);
+    if(Number.isSafeInteger(id)&&id>0) {
+      confirmDialog("Снять объявление?",
+        "Все зарезервированные предметы вернутся на общий склад.",
+        ()=>perform("market_cancel","",{listing_id:id}));
+    }
+    return;
+  }
+  if (target.dataset.marketBuy) {
+    const id=Number(target.dataset.marketBuy);
+    const listing=ui.market?.listings?.find(l=>l.id===id);
+    if(listing&&Number.isSafeInteger(id)&&id>0) {
+      const info=window.PetsMarket.allItems(ui.config).find(i=>
+        i.kind===listing.kind&&i.code===listing.code);
+      confirmDialog("Купить предложение?",
+        (info?.icon||"📦")+" "+(info?.name||"Предмет")+" ×"+listing.quantity+
+        " за "+listing.total_price+" 🍬. Продавцу начислим ириски, "+
+        "предметы попадут в рюкзак общего питомца.",
+        ()=>perform("market_buy","",{listing_id:id}));
+    }
+    return;
+  }
   if (target.dataset.businessBuild) {
     const unit=ui.config.businesses.find(b=>b.code===target.dataset.businessBuild);
     if(unit) {
@@ -715,7 +822,10 @@ async function boot() {
 // Refresh shared pet state when returning from another Telegram tab / chat.
 try { TG?.onEvent?.("activated", () => refreshPet({force:true})); } catch {}
 document.addEventListener("visibilitychange", () => {
-  if(!document.hidden) refreshPet();
+  if(!document.hidden) {
+    refreshPet();
+    if(ui.tab==="market") loadMarket({force:true});
+  }
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
 window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
