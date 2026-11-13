@@ -1,0 +1,70 @@
+/* PETS WORLD 1.9 — pet studio and game history album */
+.studio-link{background:linear-gradient(125deg,#4f3265,#245b64);}
+/* Existing hero size, native Telegram header and pet interactions are unchanged. */
+.studio-frame{--studio-outline:#f0e8f8;--studio-glow:#ffffff45;position:relative;isolation:isolate;}
+.studio-frame:before{content:"";position:absolute;inset:5px;border:4px solid var(--studio-outline);
+ border-radius:18px;box-shadow:inset 0 0 18px var(--studio-glow),
+ 0 0 16px var(--studio-glow);pointer-events:none;z-index:3;}
+.studio-frame-classic{--studio-outline:#f0e8f8;--studio-glow:#c9a9fc54;}
+.studio-frame-grove{--studio-outline:#69db96;--studio-glow:#2da85b88;}
+.studio-frame-neon{--studio-outline:#92b9ff;--studio-glow:#ab60f8aa;}
+.studio-frame-atelier{--studio-outline:#f7b1dd;--studio-glow:#ea84ca88;}
+.studio-frame-champion{--studio-outline:#f2d17b;--studio-glow:#ffba51ad;}
+.studio-frame-cosmos{--studio-outline:#91a5fa;--studio-glow:#505accaa;}
+.studio-hero-sticker{position:absolute;bottom:14px;left:13px;z-index:4;
+ display:grid;place-items:center;width:49px;height:49px;border-radius:50%;
+ background:#171f3ddd;border:2px solid var(--studio-outline);font-size:27px;
+ box-shadow:0 7px 19px #0d12309a;pointer-events:none;}
+.studio-loading{text-align:center;padding:30px 12px;}
+.studio-loading .spinner{margin:0 auto;}
+.studio-preview-panel{background:linear-gradient(145deg,#272d50,#26374f);
+ text-align:center;}
+.studio-preview{height:230px;max-width:360px;margin:auto;border-radius:25px;overflow:hidden;
+ background:linear-gradient(145deg,#bfe3e0,#c7bafa);}
+.studio-preview img{width:100%;height:100%;object-fit:cover;display:block;}
+.studio-preview:before{border-radius:20px;}
+.studio-preview-sticker{position:absolute;bottom:18px;left:18px;z-index:4;
+ display:grid;place-items:center;width:54px;height:54px;border:2px solid var(--studio-outline);
+ border-radius:50%;background:#171f3ddb;font-size:30px;}
+.studio-preview-name{font-size:22px;font-weight:900;margin-top:15px;}
+.studio-tabs{display:flex;gap:6px;overflow-x:auto;padding:7px 0;scrollbar-width:none;}
+.studio-tabs .pill{flex:1;padding:11px 10px;font-size:12px;}
+.studio-tabs::-webkit-scrollbar{display:none;}
+.studio-catalog{background:linear-gradient(135deg,#272c4d,#242f48);}
+.studio-style-item{display:flex;align-items:center;gap:10px;border-bottom:1px solid #ffffff19;
+ padding:13px 0;}
+.studio-style-item:last-child{border-bottom:0;}
+.studio-style-symbol{width:49px;height:49px;display:grid;place-items:center;
+ border-radius:15px;background:#3c466b;font-size:27px;flex-shrink:0;border:2px solid #8594b46b;}
+.studio-frame-swatch-grove{border-color:#69db96;}
+.studio-frame-swatch-neon{border-color:#92b9ff;}
+.studio-frame-swatch-atelier{border-color:#f7b1dd;}
+.studio-frame-swatch-champion{border-color:#f2d17b;}
+.studio-frame-swatch-cosmos{border-color:#91a5fa;}
+.studio-style-item.equipped .studio-style-symbol{box-shadow:0 0 22px #64d5ba8a;}
+.studio-style-item.locked{opacity:.76;}
+.studio-style-info{flex:1;min-width:0;}
+.studio-style-info strong{display:block;font-size:13px;}
+.studio-style-info small{display:block;font-size:11px;color:#b4c2d9;line-height:1.4;margin-top:4px;}
+.studio-style-item .btn{flex-shrink:0;min-height:38px;padding:8px 9px;font-size:11px;}
+.studio-progress{display:flex;align-items:center;gap:6px;margin-top:9px;}
+.studio-progress .progress{flex:1;min-width:20px;}
+.studio-progress span{font-size:10px;color:#9de6d6;white-space:nowrap;}
+.studio-free{font-size:10px;color:#9ce6d3;margin-top:8px;}
+.studio-coop{background:linear-gradient(125deg,#42355c,#2a4c57);}
+.studio-coop .subtitle b{color:#a6f0d8;}
+.studio-album{background:linear-gradient(135deg,#272d49,#283c4d);}
+.studio-memory{display:flex;align-items:start;gap:12px;padding:14px 0;
+ border-bottom:1px solid #ffffff1c;}
+.studio-memory:last-of-type{border-bottom:0;}
+.studio-memory-icon{display:grid;place-items:center;flex-shrink:0;width:43px;height:43px;
+ border-radius:14px;background:linear-gradient(140deg,#494169,#365365);font-size:21px;}
+.studio-memory-body{flex:1;min-width:0;}
+.studio-memory-body strong{font-size:13px;display:block;line-height:1.5;}
+.studio-memory-body small{font-size:11px;color:#afc2d9;display:block;margin-top:5px;}
+@media(max-width:355px){
+ .studio-style-symbol{width:42px;height:42px;font-size:23px;}
+ .studio-style-item{gap:7px;}
+ .studio-style-item .btn{font-size:10px;padding:6px;}
+ .studio-preview{height:206px;}
+}
