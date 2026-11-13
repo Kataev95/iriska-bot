@@ -21,6 +21,9 @@ from pet_game import (DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS,
 from pet_inventory import MATERIALS, RECIPES, loot_for
 from pet_home import ROOMS, room_effect, route_loot
 from pet_business import BUSINESSES, DAILY_PRODUCTION_STARTS, DAILY_SALE_COIN_LIMIT
+from pet_market import (MAX_ACTIVE_LISTINGS_PER_PET, MAX_LISTINGS_PER_PET_DAY,
+                        MAX_BUYS_PER_PET_DAY, MAX_ITEM_QUANTITY,
+                        MAX_UNIT_PRICE, LISTING_TTL_SECONDS)
 from pets import species_by_code
 
 logger = logging.getLogger(__name__)
@@ -253,6 +256,14 @@ async def bootstrap(request: web.Request):
             "production_starts": DAILY_PRODUCTION_STARTS,
             "sales_coins": DAILY_SALE_COIN_LIMIT,
         },
+        "market_rules": {
+            "active_max": MAX_ACTIVE_LISTINGS_PER_PET,
+            "posts_per_day": MAX_LISTINGS_PER_PET_DAY,
+            "buys_per_day": MAX_BUYS_PER_PET_DAY,
+            "item_max_quantity": MAX_ITEM_QUANTITY,
+            "max_unit_price": MAX_UNIT_PRICE,
+            "lifetime_seconds": LISTING_TTL_SECONDS,
+        },
     })
 
 
@@ -261,6 +272,18 @@ async def get_pet(request: web.Request):
     pet_id = int(request.match_info["pet_id"])
     return web.json_response(await snapshot(request.app["db"],
                                             request.app["config"], uid, pet_id))
+
+
+async def get_market(request: web.Request):
+    uid = current_user(request)["user_id"]
+    pet_id = int(request.match_info["pet_id"])
+    cfg = request.app["config"]
+    result = await request.app["db"].market_state(
+        pet_id, uid, time.time(), cfg.tz
+    )
+    if result is None:
+        raise web.HTTPForbidden(text="Рынок доступен только владельцам питомца")
+    return web.json_response(result)
 
 
 async def action(request: web.Request):
@@ -311,6 +334,19 @@ async def action(request: web.Request):
         )
     elif kind == "business_sell" and code in BUSINESSES:
         result = await db.sell_business_goods(pet_id, uid, code, now, cfg.tz)
+    elif kind == "market_create":
+        result = await db.create_market_listing(
+            pet_id, uid, str(payload["item_kind"]), code,
+            payload["quantity"], payload["unit_price"], now, cfg.tz,
+        )
+    elif kind == "market_cancel":
+        result = await db.cancel_market_listing(
+            pet_id, uid, int(payload["listing_id"]), now
+        )
+    elif kind == "market_buy":
+        result = await db.buy_market_listing(
+            pet_id, uid, int(payload["listing_id"]), now, cfg.tz
+        )
     else:
         raise ValueError("Unknown action")
     # Do not trust optimistic client state; return the durable DB snapshot.
@@ -348,6 +384,7 @@ def create_app(db, config) -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/api/bootstrap", bootstrap)
     app.router.add_get(r"/api/pet/{pet_id:\d+}", get_pet)
+    app.router.add_get(r"/api/market/{pet_id:\d+}", get_market)
     app.router.add_post("/api/action", action)
     app.router.add_get("/assets/pets/{filename}", pet_image)
     app.router.add_static("/static/", ROOT / "static")
