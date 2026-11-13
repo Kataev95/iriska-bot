@@ -18,6 +18,7 @@ from miniapp.auth import Unauthorized, validate_init_data
 from pet_care import ACTIONS, SHOP, SHOP_BY_CODE, check_action, image_key, mood_text, parse_set
 from pet_game import (DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS,
                       growth_days, level_for, next_level_xp, xp_for_level)
+from pet_inventory import MATERIALS, RECIPES, loot_for
 from pets import species_by_code
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
     tasks, claimed = await db.daily_state(pet_id, day)
     current_xp = int(pet["xp"])
     next_xp = next_level_xp(current_xp)
+    materials, crafts = await db.inventory_state(pet_id)
     job = PROFESSIONS.get(pet["profession"])
     hour = datetime.fromtimestamp(now, cfg.tz).hour
 
@@ -152,6 +154,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "energy": round(float(pet["energy"])), "house": bool(pet["house"]),
         "freezes": int(pet["freezes"]), "balance": int(user["balance"]) if user else 0,
         "items": parse_set(pet["items"]), "worn": parse_set(pet["worn"]),
+        "materials": materials, "crafts": crafts,
         "daily": [
             {"code": key, "name": val[0], "xp": val[1],
              "done": bool(tasks[key]), "claimed": key in claimed}
@@ -178,7 +181,8 @@ async def bootstrap(request: web.Request):
         ],
         "routes": [
             {"code": key, "name": route.title, "seconds": route.seconds,
-             "energy": route.energy, "xp": route.xp, "coins": route.coins}
+             "energy": route.energy, "xp": route.xp, "coins": route.coins,
+             "loot": loot_for(key)}
             for key, route in ROUTES.items()
         ],
         "shop": [
@@ -193,6 +197,18 @@ async def bootstrap(request: web.Request):
         "actions": [
             {"code": code, "name": action.button}
             for code, action in ACTIONS.items()
+        ],
+        "materials": [
+            {"code": code, "name": m.title, "icon": m.icon, "rarity": m.rarity,
+             "description": m.description}
+            for code, m in MATERIALS.items()
+        ],
+        "recipes": [
+            {"code": code, "name": recipe.title, "icon": recipe.icon,
+             "description": recipe.description,
+             "ingredients": [{"code": resource, "quantity": qty}
+                             for resource, qty in recipe.ingredients]}
+            for code, recipe in RECIPES.items()
         ],
     })
 
@@ -234,6 +250,8 @@ async def action(request: web.Request):
                  else "Вещи нет в гардеробе"
     elif kind == "profession" and code in PROFESSIONS:
         result = await db.choose_profession(pet_id, uid, code)
+    elif kind == "craft" and code in RECIPES:
+        result = await db.craft_trophy(pet_id, uid, code, now)
     else:
         raise ValueError("Unknown action")
     # Do not trust optimistic client state; return the durable DB snapshot.
