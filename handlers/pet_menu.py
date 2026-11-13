@@ -145,8 +145,8 @@ async def send_pet_photo(
         ReplyParameters(message_id=reply_to, allow_sending_without_reply=True)
         if reply_to else None
     )
-    # In native Rich mode omit the giant artwork from the main HUD.
-    # Event notifications and the dedicated photo screen may still show art.
+    # Keep the pet illustration visible in the primary Rich HUD.
+    # Other screens can omit repeated artwork without hiding the main pet photo.
     if os.environ.get("RICH_MESSAGES_ENABLED", "1") != "0":
         try:
             return await send_rich(
@@ -498,7 +498,6 @@ def main_keyboard(pet, config: Config, many: bool) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🎀 Гардероб", callback_data=_cb("wardrobe", pid)),
-                InlineKeyboardButton(text="📸 Фото", callback_data=_cb("photo", pid)),
             ],
         ])
     nav = []
@@ -621,7 +620,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         reply_to=message.message_id,
         markup=main_keyboard(pet, config, len(pets) > 1),
         rich_html=rich_pet_html(pet, names, config),
-        show_image=False,
+        show_image=True,
     )
 
 
@@ -667,6 +666,7 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
             card_caption(pet_row, names, config, user.id, note),
             main_keyboard(pet_row, config, many),
             rich_pet_html(pet_row, names, config, note),
+            show_image=True,
         )
 
     async def show_shop(pet_row, note: str | None = None, group: str | None = None):
@@ -750,6 +750,7 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
         await callback.answer()
         return
 
+    # Backward-compatible: old sent cards may still contain a Photo button.
     if action == "photo":
         names = await _names(db, pet)
         key = card_key(pet, config)
