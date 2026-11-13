@@ -1167,6 +1167,82 @@ class Database:
             await db.commit()
             return "ok", winner_balance, loser_balance
 
+    # ---------- 🛡 защита серий питомцев при отключении бота ----------
+
+    async def shield_pet_streaks_after_outage(
+        self, now_ts: float, tz, min_outage_hours: float = 6.0,
+    ) -> tuple[int, float]:
+        """Сохранить серии, если бот долго не работал и наступил новый день.
+
+        Храним последнее время работы смотрителя в bot_meta каждые ~60 сек.
+        На следующем проходе: если пауза >= min_outage_hours и пересекли
+        полночь по BOT_TZ, считаем пропущенные дни уважительными.
+
+        Не увеличивает серию и не воскрешает уже сбежавших (streak=0).
+        Защищает только тех, кто ещё мог иметь действующую серию в момент
+        последней проверки — кормили в тот день или накануне.
+        До очередного кормления требуется переписка обоих хозяев сегодня.
+
+        Возвращает (сколько серий защитили, продолжительность простоя в часах).
+        """
+        from datetime import datetime, timedelta
+
+        key = "pet_keeper_last_seen_ts_v1"
+        db = self._require()
+        async with self._lock:
+            cur = await db.execute(
+                "SELECT value FROM bot_meta WHERE key = ?", (key,)
+            )
+            row = await cur.fetchone()
+            try:
+                last_ts = float(row["value"]) if row else None
+            except (ValueError, TypeError, OverflowError):
+                last_ts = None
+
+            # Часы на сервере могли перевести назад: не перезаписываем
+            # будущее значение, иначе получим ложный "простой".
+            if last_ts is not None and now_ts < last_ts:
+                return 0, 0.0
+
+            gap = now_ts - last_ts if last_ts is not None else 0.0
+            if last_ts is not None and gap < 50.0:
+                return 0, 0.0
+
+            protected = 0
+            if last_ts is not None and min_outage_hours > 0:
+                prev_day = datetime.fromtimestamp(last_ts, tz).date()
+                current_day = datetime.fromtimestamp(now_ts, tz).date()
+                if gap >= min_outage_hours * 3600 and current_day > prev_day:
+                    yesterday = (current_day - timedelta(days=1)).isoformat()
+                    # Последнее кормление до простоя не старше чем "вчера"
+                    # относительно последнего работающего смотрителя.
+                    last_valid = (prev_day - timedelta(days=1)).isoformat()
+                    try:
+                        cur = await db.execute(
+                            """UPDATE pets
+                               SET last_fed_day = ?, last_remind_day = NULL
+                               WHERE status = 'active' AND streak > 0
+                                 AND last_fed_day IS NOT NULL
+                                 AND last_fed_day >= ? AND last_fed_day < ?""",
+                            (yesterday, last_valid, yesterday),
+                        )
+                        protected = int(cur.rowcount)
+                    except Exception:
+                        await db.rollback()
+                        raise
+
+            try:
+                await db.execute(
+                    """INSERT INTO bot_meta (key, value) VALUES (?, ?)
+                       ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                    (key, repr(now_ts)),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
+            return protected, gap / 3600.0 if last_ts is not None else 0.0
+
     # ---------- 🐣 общий питомец ----------
 
     @staticmethod
