@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from rich_ui import reply_rich
+from rich_ui import reply_rich, rich_table
 from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandStart
@@ -86,7 +86,16 @@ async def cmd_top(message: Message, db: Database, config: Config) -> None:
         f"Всего: {fmt(totals['msgs'])} {msgs(totals['msgs'])} от "
         f"{fmt(totals['users'])} участников, заработано 🍬 {fmt(totals['earned'])}"
     )
-    await reply_rich(message, "\n".join(lines))
+    html = (
+        "<h2>🏆 Топ чата · этот месяц</h2>"
+        + rich_table(["№", "Участник", "Сообщения", "Ириски"], [
+            [str(i), display_name(r["first_name"], r["username"]),
+             str(r["total_counted"]), str(r["balance"])]
+            for i, r in enumerate(rows, 1)
+        ])
+        + f"<footer>Всего сообщений: {totals['msgs']} · игроков: {totals['users']}</footer>"
+    )
+    await reply_rich(message, "\n".join(lines), html=html)
 
 
 @router.message(GroupF, Command("week", "topweek"))
@@ -102,7 +111,14 @@ async def cmd_week(message: Message, db: Database, config: Config) -> None:
             f"{place(i)} {display_name(r['first_name'], r['username'])} — "
             f"<b>{fmt(r['cnt'])}</b> {msgs(r['cnt'])}"
         )
-    await reply_rich(message, "\n".join(lines))
+    html = (
+        "<h2>📅 Лидеры · 7 дней</h2>"
+        + rich_table(["№", "Участник", "Сообщения"], [
+            [str(i), display_name(r["first_name"], r["username"]), str(r["cnt"])]
+            for i, r in enumerate(rows, 1)
+        ])
+    )
+    await reply_rich(message, "\n".join(lines), html=html)
 
 
 @router.message(GroupF, Command("day", "today"))
@@ -118,7 +134,14 @@ async def cmd_day(message: Message, db: Database, config: Config) -> None:
             f"{place(i)} {display_name(r['first_name'], r['username'])} — "
             f"<b>{fmt(r['cnt'])}</b> {msgs(r['cnt'])}"
         )
-    await reply_rich(message, "\n".join(lines))
+    html = (
+        "<h2>☀️ Лидеры · сегодня</h2>"
+        + rich_table(["№", "Участник", "Сообщения"], [
+            [str(i), display_name(r["first_name"], r["username"]), str(r["cnt"])]
+            for i, r in enumerate(rows, 1)
+        ])
+    )
+    await reply_rich(message, "\n".join(lines), html=html)
 
 
 @router.message(GroupF, Command("hours"))

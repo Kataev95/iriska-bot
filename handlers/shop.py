@@ -14,7 +14,7 @@ import logging
 import time
 from html import escape
 
-from rich_ui import reply_rich, send_rich
+from rich_ui import edit_rich, reply_rich, rich_table, send_rich
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
@@ -113,6 +113,20 @@ def shortage_text(item: ShopItem, balance: int) -> str:
     )
 
 
+def shop_html(items: tuple[ShopItem, ...], balance: int, contact: str) -> str:
+    """Structured native Rich Message catalog."""
+    return (
+        "<h2>🛍 Магазин ирисок</h2>"
+        f"<p>🍬 Твой баланс: <b>{balance}</b></p>"
+        + rich_table(
+            ["Товар", "Цена"],
+            [[item.label(), f"{item.price} 🍬"] for item in items],
+        )
+        + "<p>Выбери товар кнопкой, чтобы посмотреть детали.</p>"
+        + f"<footer>Помощь с заказом: {escape(contact)}</footer>"
+    )
+
+
 # ---------- клавиатуры ----------
 
 def catalog_keyboard(items: tuple[ShopItem, ...]) -> InlineKeyboardMarkup:
@@ -185,19 +199,10 @@ async def notify_admins(
 
 async def _safe_edit(
     message: Message, text: str, markup: InlineKeyboardMarkup,
+    html: str | None = None,
 ) -> bool:
-    """Правит сообщение магазина, прощая повторные нажатия без изменений.
-
-    False — сообщение обновить не удалось (например, оно слишком старое).
-    """
-    try:
-        await message.edit_text(text, reply_markup=markup)
-        return True
-    except TelegramBadRequest as exc:
-        if "not modified" in str(exc):
-            return True
-        logger.warning("Не смог обновить сообщение магазина: %s", exc)
-        return False
+    """Edit native Rich HUD in place, with a graceful legacy fallback."""
+    return await edit_rich(message, text, html=html, reply_markup=markup)
 
 
 @router.message(GroupF, Command("shop"))
@@ -214,6 +219,7 @@ async def cmd_shop(message: Message, db: Database, config: Config) -> None:
     items = catalog(config.shop_prices)
     await reply_rich(message, 
         shop_text(items, balance, config.shop_contact),
+        html=shop_html(items, balance, config.shop_contact),
         reply_markup=catalog_keyboard(items),
     )
 
@@ -271,7 +277,7 @@ async def on_shop_callback(
     if action == "menu":
         await _safe_edit(
             message, shop_text(items, balance, config.shop_contact),
-            catalog_keyboard(items),
+            catalog_keyboard(items), shop_html(items, balance, config.shop_contact),
         )
         await callback.answer()
         return
