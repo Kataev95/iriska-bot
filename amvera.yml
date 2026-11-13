@@ -10,3 +10,5 @@ build:
 run:
   scriptName: bot.py
   persistenceMount: /data
+  # Required for the Mini App HTTPS reverse proxy.
+  containerPort: 8080

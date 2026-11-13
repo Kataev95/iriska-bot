@@ -20,6 +20,7 @@ import secrets
 import time
 from datetime import datetime
 
+from miniapp.auth import main_app_link
 from rich_ui import (
     asset_url, edit_rich, edit_rich_by_id, panel_html,
     reply_rich, rich_table, send_rich,
@@ -676,6 +677,29 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         return
     pet = await refresh_care(db, pet, config, local_now(config).timestamp())
     names = await _names(db, pet)
+    if config.miniapp_enabled:
+        me = await message.bot.get_me()
+        link = main_app_link(me.username, int(pet["id"]))
+        xp = int(pet["xp"])
+        lvl = level_for(xp)
+        text = (
+            f"🐾 <b>{pet_title(pet)}</b> · ⭐ уровень {lvl}/20\n"
+            f"🔥 {int(pet['streak'])} {days(int(pet['streak']))} · {xp} XP\n"
+            f"👫 {_plain(names, pet['user_a'])} и {_plain(names, pet['user_b'])}\n"
+            "🎮 Кормление, задания, походы, развитие и магазин — в Mini App."
+        )
+        markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🎮 Открыть игру PETS", url=link),
+        ]])
+        await reply_rich(
+            message, text, html=(
+                f"<h2>🐾 {pet_title(pet)}</h2>"
+                f"<p>⭐ Уровень {lvl}/20 · {xp} XP · "
+                f"🔥 {int(pet['streak'])} {days(int(pet['streak']))}</p>"
+                "<p>🎮 Все игровые действия — в Mini App.</p>"
+            ), reply_markup=markup,
+        )
+        return
     await send_pet_photo(
         message.bot, db, message.chat.id, card_key(pet, config),
         card_caption(pet, names, config, user.id),

@@ -23,6 +23,8 @@ from aiogram.types import (
 from dotenv import load_dotenv
 
 from backup_db import backup_keeper
+from aiohttp import web
+from miniapp.api import create_app
 from config import Config, load_config
 from db import Database
 from handlers import (
@@ -210,7 +212,7 @@ async def set_commands(bot: Bot, config: Config) -> None:
         BotCommand(command="day", description="Топ за сегодня"),
         BotCommand(command="casino", description="Слоты: /casino 10 🎰"),
         BotCommand(command="games", description="Правила игр"),
-        BotCommand(command="pets", description="Мой питомец: карточка с кнопками 🐾"),
+        BotCommand(command="pets", description="Открыть игру PETS 🎮"),
         BotCommand(command="pettop", description="Топ питомцев чата"),
         BotCommand(command="shop", description="Магазин за ириски 🛍"),
         BotCommand(command="hours", description="Бонусные часы ⏰"),
@@ -289,7 +291,21 @@ async def main() -> None:
     pets_keeper = asyncio.create_task(pet_keeper(bot, db, config))
     pets_events = asyncio.create_task(pet_events_keeper(bot, db, config))
     db_backups = asyncio.create_task(backup_keeper(db))
+    miniapp_runner = None
     try:
+        if config.miniapp_enabled:
+            if not config.miniapp_url.startswith("https://"):
+                raise RuntimeError(
+                    "Для Mini App обязателен MINIAPP_URL=https://... и домен в @BotFather"
+                )
+            miniapp_runner = web.AppRunner(create_app(db, config),
+                                           access_log=None)
+            await miniapp_runner.setup()
+            site = web.TCPSite(miniapp_runner, "0.0.0.0", config.miniapp_port)
+            await site.start()
+            logger.info("PETS Mini App HTTP :%d (%s)",
+                        config.miniapp_port, config.miniapp_url)
+
         await set_commands(bot, config)
         await load_active_chats(db)   # викторины, пережившие рестарт
         await resume_queues(bot, db)  # продолжаем очередь вопросов, если была
@@ -315,6 +331,8 @@ async def main() -> None:
             announcer, monthly_announcer, watchdog, pets_keeper, pets_events, db_backups,
             return_exceptions=True,
         )
+        if miniapp_runner is not None:
+            await miniapp_runner.cleanup()
         await db.close()
 
 
