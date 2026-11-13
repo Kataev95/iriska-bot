@@ -6,6 +6,8 @@ through the inherited _game_transaction.
 """
 from datetime import datetime, timedelta, time as time_of_day
 
+from pet_league_db import PetLeagueDatabase
+
 from pet_market import (
     ITEM_TYPES, LISTING_TTL_SECONDS, MAX_ACTIVE_LISTINGS_PER_PET,
     MAX_LISTINGS_PER_PET_DAY, MAX_BUYS_PER_PET_DAY,
@@ -13,7 +15,7 @@ from pet_market import (
 )
 
 
-class PetMarketDatabase:
+class PetMarketDatabase(PetLeagueDatabase):
     async def _migrate_market(self):
         await self._require().executescript("""
             CREATE TABLE IF NOT EXISTS pet_market_listings (

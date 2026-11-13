@@ -274,6 +274,18 @@ async def get_pet(request: web.Request):
                                             request.app["config"], uid, pet_id))
 
 
+async def get_league(request: web.Request):
+    user_id = current_user(request)["user_id"]
+    pet_id = int(request.match_info["pet_id"])
+    cfg = request.app["config"]
+    result = await request.app["db"].league_state(
+        pet_id, user_id, time.time(), cfg.tz
+    )
+    if result is None:
+        raise web.HTTPForbidden(text="Лига доступна только владельцам питомца")
+    return web.json_response(result)
+
+
 async def get_market(request: web.Request):
     uid = current_user(request)["user_id"]
     pet_id = int(request.match_info["pet_id"])
@@ -385,6 +397,7 @@ def create_app(db, config) -> web.Application:
     app.router.add_get("/api/bootstrap", bootstrap)
     app.router.add_get(r"/api/pet/{pet_id:\d+}", get_pet)
     app.router.add_get(r"/api/market/{pet_id:\d+}", get_market)
+    app.router.add_get(r"/api/league/{pet_id:\d+}", get_league)
     app.router.add_post("/api/action", action)
     app.router.add_get("/assets/pets/{filename}", pet_image)
     app.router.add_static("/static/", ROOT / "static")
