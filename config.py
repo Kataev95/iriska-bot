@@ -200,6 +200,10 @@ class Config:
     # Защищать серии после простоя сервера (пауза от N часов и смена даты).
     # 0 — выключить. Не влияет на обычные пропущенные дни, когда бот онлайн.
     pet_outage_grace_hours: float = 6.0
+    # Mini App: disabled until bot + domain are set up in @BotFather and Amvera.
+    miniapp_enabled: bool = False
+    miniapp_url: str = ""
+    miniapp_port: int = 8080
 
     @property
     def pet_restore_seconds(self) -> float:
@@ -284,5 +288,8 @@ def load_config() -> Config:
         pet_events_per_day=_int_env("PET_EVENTS_PER_DAY", 2),
         pet_event_ttl_hours=_float_env("PET_EVENT_TTL_HOURS", 2.0),
         pet_outage_grace_hours=_float_env("PET_OUTAGE_GRACE_HOURS", 6.0),
+        miniapp_enabled=_bool_env("MINIAPP_ENABLED", False),
+        miniapp_url=(os.getenv("MINIAPP_URL") or "").strip().rstrip("/"),
+        miniapp_port=_int_env("MINIAPP_PORT", _int_env("PORT", 8080)),
     )
 
