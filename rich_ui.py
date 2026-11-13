@@ -8,7 +8,7 @@ import re
 from html import escape
 from typing import Any
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.methods.base import TelegramMethod
 from aiogram.types import InlineKeyboardMarkup, Message, ReplyParameters
 
@@ -120,7 +120,7 @@ async def send_rich(
             reply_markup=reply_markup, reply_parameters=reply_parameters,
             disable_notification=disable_notification,
         ))
-    except TelegramBadRequest as exc:
+    except (TelegramBadRequest, TelegramNotFound) as exc:
         if image_url:
             try:
                 return await bot(_SendRich(
@@ -128,7 +128,7 @@ async def send_rich(
                     reply_markup=reply_markup, reply_parameters=reply_parameters,
                     disable_notification=disable_notification,
                 ))
-            except TelegramBadRequest as second:
+            except (TelegramBadRequest, TelegramNotFound) as second:
                 exc = second
         if not fallback:
             raise exc
@@ -173,7 +173,7 @@ async def edit_rich_by_id(
             rich_message=_payload(doc, image_url), reply_markup=reply_markup,
         ))
         return True
-    except TelegramBadRequest as exc:
+    except (TelegramBadRequest, TelegramNotFound) as exc:
         if "not modified" in str(exc):
             return True
         if image_url:
@@ -183,7 +183,7 @@ async def edit_rich_by_id(
                     rich_message=_payload(doc), reply_markup=reply_markup,
                 ))
                 return True
-            except TelegramBadRequest as second:
+            except (TelegramBadRequest, TelegramNotFound) as second:
                 if "not modified" in str(second):
                     return True
                 raise second from exc
@@ -203,7 +203,7 @@ async def edit_rich(
                 message.bot, message.chat.id, message.message_id, text,
                 html=html, image_url=image_url, reply_markup=reply_markup,
             )
-        except TelegramBadRequest as exc:
+        except (TelegramBadRequest, TelegramNotFound) as exc:
             logger.warning("Rich edit unavailable: %s", exc)
     try:
         if message.photo:
@@ -211,7 +211,7 @@ async def edit_rich(
         else:
             await message.edit_text(text, reply_markup=reply_markup)
         return True
-    except TelegramBadRequest as exc:
+    except (TelegramBadRequest, TelegramNotFound) as exc:
         if "not modified" in str(exc):
             return True
         logger.warning("Unable to edit HUD: %s", exc)

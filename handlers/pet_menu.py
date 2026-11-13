@@ -25,7 +25,7 @@ from rich_ui import (
     reply_rich, rich_table, send_rich,
 )
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -153,7 +153,7 @@ async def send_pet_photo(
                 image_url=asset_url(key), reply_to_message_id=reply_to,
                 reply_markup=markup, fallback=False,
             )
-        except TelegramBadRequest as exc:
+        except (TelegramBadRequest, TelegramNotFound) as exc:
             logger.info("Rich pet image unsupported, use legacy photo: %s", exc)
     media, from_disk = await _media(db, key)
     if media is not None and len(caption) <= 1024:
