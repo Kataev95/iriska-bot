@@ -19,6 +19,7 @@ from pet_care import ACTIONS, SHOP, SHOP_BY_CODE, check_action, image_key, mood_
 from pet_game import (DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS,
                       growth_days, level_for, next_level_xp, xp_for_level)
 from pet_inventory import MATERIALS, RECIPES, loot_for
+from pet_home import ROOMS, room_effect, route_loot
 from pets import species_by_code
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,8 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
     current_xp = int(pet["xp"])
     next_xp = next_level_xp(current_xp)
     materials, crafts = await db.inventory_state(pet_id)
+    rooms, room_used = await db.home_state(pet_id, day)
+    workshop_level = rooms["workshop"] if pet["house"] else 0
     job = PROFESSIONS.get(pet["profession"])
     hour = datetime.fromtimestamp(now, cfg.tz).hour
 
@@ -155,6 +158,11 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "freezes": int(pet["freezes"]), "balance": int(user["balance"]) if user else 0,
         "items": parse_set(pet["items"]), "worn": parse_set(pet["worn"]),
         "materials": materials, "crafts": crafts,
+        "house_rooms": rooms if pet["house"] else {code: 0 for code in ROOMS},
+        "house_used": room_used if pet["house"] else [],
+        "house_route_loot": {
+            code: route_loot(code, workshop_level) for code in ROUTES
+        },
         "daily": [
             {"code": key, "name": val[0], "xp": val[1],
              "done": bool(tasks[key]), "claimed": key in claimed}
@@ -210,6 +218,17 @@ async def bootstrap(request: web.Request):
                              for resource, qty in recipe.ingredients]}
             for code, recipe in RECIPES.items()
         ],
+        "house_rooms": [
+            {"code": code, "name": room.title, "icon": room.icon,
+             "description": room.description,
+             "tiers": [
+                 {"level": i + 1, "effect": room.effects[i],
+                  "costs": [{"code": material, "quantity": count}
+                            for material, count in cost]}
+                 for i, cost in enumerate(room.upgrades)
+             ]}
+            for code, room in ROOMS.items()
+        ],
     })
 
 
@@ -252,6 +271,10 @@ async def action(request: web.Request):
         result = await db.choose_profession(pet_id, uid, code)
     elif kind == "craft" and code in RECIPES:
         result = await db.craft_trophy(pet_id, uid, code, now)
+    elif kind == "build_room" and code in ROOMS:
+        result = await db.build_room(pet_id, uid, code, now, int(payload["expected_level"]))
+    elif kind == "room_use" and room_effect(code, 1):
+        result = await db.use_room(pet_id, uid, code, now, cfg.tz)
     else:
         raise ValueError("Unknown action")
     # Do not trust optimistic client state; return the durable DB snapshot.

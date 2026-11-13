@@ -154,6 +154,17 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect((recipe?.icon || "🎁")+" Новый сувенир!", "reward");
     return;
   }
+  if (kind === "build_room" &&
+      Number(after.house_rooms?.[code]||0) > Number(before.house_rooms?.[code]||0)) {
+    const room = ui.config.house_rooms.find(r=>r.code===code);
+    playEffect((room?.icon || "🏡")+" Комната улучшена!", "level");
+    return;
+  }
+  if (kind === "room_use" && message.startsWith("✅") &&
+      !(before.house_used||[]).includes(code) && (after.house_used||[]).includes(code)) {
+    playEffect(message, "care");
+    return;
+  }
   let success = false;
   if (kind === "claim") {
     success = Boolean(before.trip && !after.trip);
@@ -220,6 +231,11 @@ function home(p) {
     '<button class="btn btn-quiet" data-click="wardrobe">Открыть →</button></div>'+
     '<p class="subtitle">'+p.items.length+' вещей · '+p.worn.length+' надето'+
     (p.house ? ' · 🏠 Домик' : '')+'</p></div>'+
+    '<div class="panel home-link"><div class="row"><div><div class="h2">🏡 Дом '+safe(p.name)+'</div>'+
+    '<p class="subtitle">'+(p.house
+      ? 'Улучшено '+Object.values(p.house_rooms||{}).reduce((sum,n)=>sum+n,0)+' / 6 уровней комнат'
+      : 'Постройте свой уютный домик')+'</p></div>'+
+    '<button class="btn btn-primary" data-click="house">Открыть →</button></div></div>'+
     '<div class="panel backpack-link"><div class="row"><div><div class="h2">🎒 Общий рюкзак</div>'+
     '<p class="subtitle">'+(p.crafts||[]).length+' сувениров · '+
     ui.config.materials.reduce((sum,m)=>sum+resourceQuantity(p,m.code),0)+' материалов</p></div>'+
@@ -229,11 +245,12 @@ function home(p) {
         .map(r=>'<span class="chip chip-purple">'+safe(r.icon)+' '+safe(r.name)+'</span>').join('')+'</div>' : '')+
     '</div>';
 }
-function routeLoot(route) {
-  if (!route || !route.loot) return '<span class="muted">Нет данных</span>';
-  return ui.config.materials.filter(m => route.loot[m.code] > 0).map(m =>
+function routeLoot(route, p) {
+  if (!route) return '<span class="muted">Нет данных</span>';
+  const loot = p?.house_route_loot?.[route.code] || route.loot || {};
+  return ui.config.materials.filter(m => loot[m.code] > 0).map(m =>
     '<span class="chip material-chip '+safe(m.rarity)+'">'+safe(m.icon)+' +'+
-    value(route.loot[m.code])+' '+safe(m.name)+'</span>'
+    value(loot[m.code])+' '+safe(m.name)+'</span>'
   ).join("");
 }
 function trips(p) {
@@ -248,7 +265,7 @@ function trips(p) {
       '<small data-trip-countdown>⏳ '+timeText+'</small></div></div>'+
       '<div class="route-info"><span class="chip">⭐ '+p.trip.xp+' XP</span><span class="chip">🍬 '+p.trip.coins+'</span></div>'+
       '<p class="route-loot-title">🎒 Материалы после возвращения</p>'+
-      '<div class="route-loot">'+routeLoot(r)+'</div>'+
+      '<div class="route-loot">'+routeLoot(r,p)+'</div>'+
       (left ? '<button class="btn btn-wide" data-click="refresh">🔄 Обновить</button>' :
         '<button class="btn btn-primary btn-wide" data-action="claim" data-trip="'+p.trip.id+'">🎁 Забрать награду</button>')+
       '</div>';
@@ -269,7 +286,7 @@ function trips(p) {
         safe(r.name)+'</strong><small>Приключение · '+time+'</small></div></div>'+
         '<div class="route-info"><span class="chip">⚡ '+energy+'</span>'+
         '<span class="chip">⭐ '+bonusXp+' XP</span><span class="chip">🍬 '+coins+'</span></div>'+
-        '<div class="route-loot">🎒 '+routeLoot(r)+'</div>'+
+        '<div class="route-loot">🎒 '+routeLoot(r,p)+'</div>'+
         '<button class="btn btn-primary" data-action="start" data-code="'+safe(r.code)+'" '+
         (locked?'disabled':'')+'>'+(limited?'🔒 Лимит походов на сегодня':locked?'🔒 Мало энергии или еды':'🧭 Отправиться')+'</button></div>';
     }).join("");
@@ -328,7 +345,8 @@ function growth(p) {
         '<div class="card-text"><strong>'+safe(job.name)+'</strong><small>'+safe(job.effect)+'</small></div>'+
         '<button class="btn btn-primary" data-profession="'+safe(job.code)+'">Выбрать</button></div>').join("")
     )+'</div><button class="btn btn-wide" data-click="wardrobe">🎀 Гардероб →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>';
+    '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>'+
+    '<button class="btn btn-quiet btn-wide" data-click="house">🏡 Мой дом →</button>';
 }
 function inventory(p) {
   const stock = p.materials || {};
@@ -394,9 +412,10 @@ function render() {
   wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
   nav.classList.remove("hidden");
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
-    (ui.tab===id || ['wardrobe','inventory'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
+    (ui.tab===id || ['wardrobe','inventory','house'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
   app.innerHTML=renderPicker()+({
-    home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory
+    home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory,
+    house: p => window.PetsHouse.renderHouse(p,ui.config)
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
@@ -441,7 +460,7 @@ function syncBackButton() {
   } catch {}
 }
 function goToTab(tab) {
-  if (["wardrobe","inventory"].includes(tab) && !["wardrobe","inventory"].includes(ui.tab)) {
+  if (["wardrobe","inventory","house"].includes(tab) && !["wardrobe","inventory","house"].includes(ui.tab)) {
     ui.returnTab = ui.tab;
   }
   ui.tab = tab;
@@ -455,7 +474,7 @@ function closeModal() {
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
-  else if (["wardrobe","inventory"].includes(ui.tab)) goToTab(ui.returnTab || "home");
+  else if (["wardrobe","inventory","house"].includes(ui.tab)) goToTab(ui.returnTab || "home");
   else if (ui.tab !== "home") goToTab("home");
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
@@ -528,6 +547,25 @@ document.addEventListener("click", async e=>{
   if (target.dataset.click==="picker") {ui.picker=!ui.picker;render();return;}
   if (target.dataset.click==="pet-greet") {petGreeting();return;}
   if (target.dataset.click==="wardrobe") {tap();goToTab("wardrobe");return;}
+  if (target.dataset.click==="house") {tap();goToTab("house");return;}
+  if (target.dataset.click==="house-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.buildRoom) {
+    const room=ui.config.house_rooms.find(r=>r.code===target.dataset.buildRoom);
+    if (room) {
+      const tier=room.tiers[Number(ui.pet.house_rooms?.[room.code]||0)];
+      if (tier) {
+        const costText=tier.costs.map(c=>{
+          const material=ui.config.materials.find(m=>m.code===c.code);
+          return (material?.icon||'📦')+' '+c.quantity;
+        }).join(', ');
+        confirmDialog('Улучшить '+room.name+'?',
+          'Общие материалы будут потрачены: '+costText+'. Улучшение для двоих.',
+          ()=>perform("build_room",room.code,
+            {expected_level:Number(ui.pet.house_rooms?.[room.code]||0)}));
+      }
+    }
+    return;
+  }
   if (target.dataset.click==="inventory") {tap();goToTab("inventory");return;}
   if (target.dataset.click==="inventory-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.craft) {

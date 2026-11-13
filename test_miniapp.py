@@ -256,6 +256,73 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["pet"]["materials"]["leaf"],2)
         self.assertEqual(data["pet"]["xp"],35)
 
+    async def test_home_purchase_shared_rooms_daily_bonus_and_privacy(self):
+        # Existing public API always authenticates using Telegram initData.
+        await self.db.adjust_balance(CHAT_ID,101,10,"test",None)
+        await self.db._require().executemany(
+            "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
+            [(1,"wood",10),(1,"leaf",8),(1,"stone",3)],
+        )
+        await self.db._require().commit()
+        payload={"pet_id":1,"kind":"build_room","code":"bedroom","expected_level":0,
+                 "materials":{"wood":10000},"user_id":201,"balance":99999}
+        denied=await self.client.post("/api/action",
+            headers={"X-Telegram-Init-Data": signed(201)},json=payload)
+        self.assertEqual(denied.status,403)
+        absent=await self.client.post("/api/action",headers=self.headers,json=payload)
+        self.assertIn("Сначала купите домик",(await absent.json())["message"])
+
+        buy=await self.client.post("/api/action",headers=self.headers,
+                                   json={"pet_id":1,"kind":"buy","code":"house"})
+        bought=await buy.json()
+        self.assertTrue(bought["pet"]["house"])
+        self.assertEqual(bought["pet"]["balance"],5)
+        self.assertEqual(bought["pet"]["house_rooms"]["bedroom"],0)
+
+        incorrect=await self.client.post("/api/action",headers=self.headers,
+             json={"pet_id":1,"kind":"build_room","code":"bedroom"})
+        self.assertEqual(incorrect.status,400)
+        upgrade=await self.client.post("/api/action",headers=self.headers,json=payload)
+        result=await upgrade.json()
+        self.assertTrue(result["message"].startswith("✅"))
+        self.assertEqual(result["pet"]["house_rooms"]["bedroom"],1)
+        self.assertEqual(result["pet"]["materials"]["wood"],6)
+        self.assertEqual(result["pet"]["materials"]["leaf"],6)
+        replay=await self.client.post("/api/action",headers=self.headers,json=payload)
+        self.assertIn("изменился",(await replay.json())["message"])
+        self.assertEqual((await self.db.inventory_state(1))[0]["wood"],6)
+        used=await self.client.post("/api/action",
+            headers={"X-Telegram-Init-Data":signed(102)},
+            json={"pet_id":1,"kind":"room_use","code":"bedroom"})
+        outcome=await used.json()
+        self.assertEqual(used.status,200)
+        self.assertTrue(outcome["message"].startswith("✅"))
+        self.assertIn("bedroom",outcome["pet"]["house_used"])
+        repeated=await self.client.post("/api/action",headers=self.headers,
+                                  json={"pet_id":1,"kind":"room_use","code":"bedroom"})
+        self.assertIn("сегодня",(await repeated.json())["message"])
+
+        workshop=await self.client.post("/api/action",headers=self.headers,
+                json={"pet_id":1,"kind":"build_room","code":"workshop","expected_level":0})
+        upgraded=await workshop.json()
+        self.assertTrue(upgraded["message"].startswith("✅"))
+        self.assertEqual(upgraded["pet"]["house_route_loot"]["forest"]["wood"],3)
+        self.assertEqual(upgraded["pet"]["house_route_loot"]["park"]["leaf"],2)
+        partner=await self.client.get("/api/pet/1",
+                    headers={"X-Telegram-Init-Data":signed(102)})
+        self.assertEqual((await partner.json())["house_rooms"]["workshop"],1)
+
+    async def test_house_api_rejects_unknown_rooms_and_other_users(self):
+        invalid=await self.client.post("/api/action",headers=self.headers,
+             json={"pet_id":1,"kind":"build_room","code":"__all","expected_level":0})
+        self.assertEqual(invalid.status,400)
+        unknown=await self.client.post("/api/action",headers=self.headers,
+             json={"pet_id":1,"kind":"room_use","code":"workshop"})
+        self.assertEqual(unknown.status,400)
+        no_auth=await self.client.post("/api/action",json={"pet_id":1,
+                "kind":"room_use","code":"bedroom"})
+        self.assertEqual(no_auth.status,401)
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -293,7 +360,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("trips_remaining", js)
         self.assertIn("syncClock(snapshot)", js)
         self.assertIn("/static/style.css?v=5", html)
-        self.assertIn("/static/app.js?v=5", html)
+        self.assertIn("/static/house.css?v=1", html)
+        self.assertIn("/static/house.js?v=1", html)
+        self.assertIn("/static/app.js?v=6", html)
 
 
 class MiniAppFeedbackTests(unittest.TestCase):
@@ -320,6 +389,10 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('task-progress', css)
         self.assertIn('safeAreaInset', js)
         self.assertIn('contentSafeAreaInset', js)
+        self.assertIn('window.PetsHouse.renderHouse(p,ui.config)', js)
+        self.assertIn('data-click="house"', js)
+        self.assertIn('data-build-room=', (static/"house.js").read_text(encoding="utf-8"))
+        self.assertIn('house-scene', (static/"house.css").read_text(encoding="utf-8"))
 
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
@@ -327,10 +400,12 @@ class MiniAppFeedbackTests(unittest.TestCase):
         import subprocess
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
-        js = Path(__file__).resolve().parent / "miniapp" / "static" / "app.js"
-        cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
-                            text=True, timeout=15, check=False)
-        self.assertEqual(cp.returncode, 0, cp.stderr)
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        for name in ("app.js", "house.js"):
+            js = static / name
+            cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
+                                text=True, timeout=15, check=False)
+            self.assertEqual(cp.returncode, 0, cp.stderr)
 
 
 if __name__ == "__main__":

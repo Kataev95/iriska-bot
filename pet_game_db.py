@@ -17,6 +17,7 @@ from pet_care import (
 )
 from pet_game import DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS, legacy_xp, level_for
 from pet_inventory import MATERIALS, RECIPES, loot_for, loot_summary
+from pet_home import MAX_ROOM_LEVEL, ROOMS, room_effect, route_loot
 
 
 class PetGameDatabase:
@@ -74,6 +75,32 @@ class PetGameDatabase:
                 PRIMARY KEY(pet_id, recipe)
             );
             CREATE INDEX IF NOT EXISTS idx_pet_crafts_pet ON pet_crafts(pet_id);
+            -- Existing pets.house is still the purchased base house.
+            CREATE TABLE IF NOT EXISTS pet_house_rooms (
+                pet_id INTEGER NOT NULL,
+                room TEXT NOT NULL,
+                level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 2),
+                built_at REAL NOT NULL,
+                PRIMARY KEY(pet_id, room)
+            );
+            -- Historical audit of completed upgrades, exactly once per tier.
+            CREATE TABLE IF NOT EXISTS pet_house_upgrades (
+                pet_id INTEGER NOT NULL,
+                room TEXT NOT NULL,
+                level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 2),
+                user_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY(pet_id, room, level)
+            );
+            -- One use per shared pet / room / local calendar day.
+            CREATE TABLE IF NOT EXISTS pet_room_uses (
+                pet_id INTEGER NOT NULL,
+                room TEXT NOT NULL,
+                day TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                used_at REAL NOT NULL,
+                PRIMARY KEY(pet_id, room, day)
+            );
         """)
         marker = await (
             await db.execute("SELECT value FROM bot_meta WHERE key='pets3_migrated'")
@@ -372,7 +399,16 @@ class PetGameDatabase:
             )
             # ONE transaction covers trip closure, XP, coins and materials.
             # A second claim sees claimed_at and never enters this section.
-            loot = loot_for(trip["route"])
+            workshop = await (
+                await db.execute(
+                    "SELECT level FROM pet_house_rooms "
+                    "WHERE pet_id=? AND room='workshop'",
+                    (pet_id,),
+                )
+            ).fetchone() if pet["house"] else None
+            loot = route_loot(
+                trip["route"], int(workshop["level"]) if workshop else 0
+            )
             for material, quantity in loot.items():
                 await db.execute(
                     "INSERT INTO pet_material_drops(trip_id,material,quantity) "
@@ -390,6 +426,144 @@ class PetGameDatabase:
                 f"⭐ +{trip['xp']} XP питомцу, 🍬 +{trip['coins']} отправившему хозяину."
                 + (f"\n🎒 В общий рюкзак: {loot_summary(loot)}." if loot else "")
             )
+
+    async def home_state(self, pet_id, day):
+        """Read-only shared home details. Caller verifies pet ownership."""
+        db = self._require()
+        rows = await (
+            await db.execute(
+                "SELECT room,level FROM pet_house_rooms WHERE pet_id=?",
+                (pet_id,),
+            )
+        ).fetchall()
+        used = await (
+            await db.execute(
+                "SELECT room FROM pet_room_uses WHERE pet_id=? AND day=?",
+                (pet_id, day),
+            )
+        ).fetchall()
+        return (
+            {room: next((int(row["level"]) for row in rows
+                         if row["room"] == room), 0) for room in ROOMS},
+            [row["room"] for row in used],
+        )
+
+    async def build_room(self, pet_id, user_id, code, now, expected_level):
+        """Spend shared materials exactly once to build or upgrade a room."""
+        definition = ROOMS.get(code)
+        if definition is None:
+            return "Неизвестное помещение"
+        async with self._game_transaction() as db:
+            pet = await self._game_pet(db, pet_id, user_id)
+            if pet is None or not int(pet["best_streak"]):
+                return "Питомец недоступен"
+            if not int(pet["house"]):
+                return "Сначала купите домик в магазине за ириски"
+            current = await (
+                await db.execute(
+                    "SELECT level FROM pet_house_rooms WHERE pet_id=? AND room=?",
+                    (pet_id, code),
+                )
+            ).fetchone()
+            level = int(current["level"]) if current else 0
+            # A stale tap must NOT buy the next tier automatically.
+            # Compare while holding the write lock, before any deductions.
+            if level != expected_level:
+                return "Уровень комнаты изменился. Обновите домик и попробуйте снова"
+            if level >= MAX_ROOM_LEVEL:
+                return "Эта комната уже полностью улучшена"
+            costs = definition.upgrades[level]
+            stocks = {
+                row["material"]: int(row["quantity"])
+                for row in await (
+                    await db.execute(
+                        "SELECT material, quantity FROM pet_materials WHERE pet_id=?",
+                        (pet_id,),
+                    )
+                ).fetchall()
+            }
+            missing = [
+                f"{MATERIALS[material].icon} {MATERIALS[material].title}: "
+                f"{quantity - stocks.get(material, 0)}"
+                for material, quantity in costs
+                if stocks.get(material, 0) < quantity
+            ]
+            if missing:
+                return "Не хватает материалов: " + ", ".join(missing)
+            # Deduct all costs and record the completed tier in one transaction.
+            for material, quantity in costs:
+                cur = await db.execute(
+                    "UPDATE pet_materials SET quantity=quantity-? "
+                    "WHERE pet_id=? AND material=? AND quantity>=?",
+                    (quantity, pet_id, material, quantity),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError("Материалы изменились — улучшение отменено")
+            await db.execute(
+                "INSERT INTO pet_house_rooms(pet_id,room,level,built_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(pet_id,room) DO UPDATE SET "
+                "level=excluded.level,built_at=excluded.built_at",
+                (pet_id, code, level + 1, now),
+            )
+            await db.execute(
+                "INSERT INTO pet_house_upgrades(pet_id,room,level,user_id,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (pet_id, code, level + 1, user_id, now),
+            )
+            return (
+                f"✅ {definition.icon} {definition.title} — уровень "
+                f"{level + 1}/{MAX_ROOM_LEVEL}! {definition.effects[level]}"
+            )
+
+    async def use_room(self, pet_id, user_id, code, now, tz):
+        """Daily shared room bonus, not an unbounded source of resources/XP."""
+        if code not in ("bedroom", "garden"):
+            return "В этой комнате нет ежедневного действия"
+        async with self._game_transaction() as db:
+            pet = await self._game_pet(db, pet_id, user_id)
+            if pet is None or not int(pet["best_streak"]):
+                return "Питомец недоступен"
+            if not int(pet["house"]):
+                return "Сначала купите домик в магазине"
+            room = await (
+                await db.execute(
+                    "SELECT level FROM pet_house_rooms WHERE pet_id=? AND room=?",
+                    (pet_id, code),
+                )
+            ).fetchone()
+            level = int(room["level"]) if room else 0
+            bonus = room_effect(code, level)
+            if bonus is None:
+                return "Сначала постройте эту комнату"
+            day = datetime.fromtimestamp(now, tz).date().isoformat()
+            used = await (
+                await db.execute(
+                    "SELECT 1 FROM pet_room_uses "
+                    "WHERE pet_id=? AND room=? AND day=?",
+                    (pet_id, code, day),
+                )
+            ).fetchone()
+            if used:
+                return "Комната уже использована сегодня. Возвращайтесь завтра"
+            pet = await self._game_refresh(db, pet, now, tz)
+            column, maximum_gain = bonus
+            previous = float(pet[column])
+            if previous >= 95:
+                return "Питомцу пока не требуется такая помощь (показатель выше 94)"
+            new_amount = clamp(previous + maximum_gain)
+            await db.execute(
+                f"UPDATE pets SET {column}=? WHERE id=?",
+                (new_amount, pet_id),
+            )
+            await db.execute(
+                "INSERT INTO pet_room_uses(pet_id,room,day,user_id,used_at) "
+                "VALUES(?,?,?,?,?)",
+                (pet_id, code, day, user_id, now),
+            )
+            label = "энергии" if code == "bedroom" else "настроения"
+            gain = round(new_amount - previous)
+            return f"✅ {ROOMS[code].icon} +{gain} {label} питомцу. Снова завтра!"
+
 
     async def inventory_state(self, pet_id):
         """Read-only summary; the Mini App verifies ownership before calling."""
