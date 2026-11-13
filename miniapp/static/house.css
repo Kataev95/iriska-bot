@@ -1,0 +1,38 @@
+/* PETS WORLD 1.4 — cozy illustrated house and room cards */
+.home-link {background:linear-gradient(125deg,rgba(66,61,117,.8),rgba(33,71,89,.77));}
+.home-link .h2 {margin:0;}
+.house-scene {isolation:isolate;position:relative;height:240px;border:1px solid #a1bfe060;
+ border-radius:27px;overflow:hidden;background:linear-gradient(180deg,#263c6e 0%,#526cad 53%,#74a5a3 77%,#396c5b 78%);
+ box-shadow:inset 0 2px 14px #ffffff24,0 10px 32px #030b1d5c;}
+.house-scene::before {content:"";position:absolute;inset:auto -20% -54px -20%;height:113px;
+ border-radius:50% 50% 0 0;background:linear-gradient(180deg,#4d9678,#225d59);}
+.house-scene::after {content:"✨";position:absolute;top:24px;right:40px;font-size:25px;opacity:.8;}
+.house-sky {position:absolute;top:25px;left:30px;color:#e8d9ff;font-size:23px;letter-spacing:14px;}
+.house-sky span {color:#fff;text-shadow:0 3px 18px #fff9;}
+.house-illustration {position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);font-size:128px;
+ line-height:1;filter:drop-shadow(0 15px 15px #1a283d7a);z-index:1;}
+.house-ground {position:absolute;bottom:13px;left:0;right:0;text-align:center;font-size:24px;
+ letter-spacing:10px;z-index:2;white-space:nowrap;}
+.house-locked {background:linear-gradient(145deg,#292c4f,#172a39);}
+.house-overview {background:linear-gradient(135deg,#293b58,#2c284b);}
+.house-progress {height:10px;margin-top:16px;}
+.house-rooms-title {margin:22px 3px 11px;}
+.house-room {margin:12px 0;background:linear-gradient(155deg,#202b47,#1c2440);}
+.house-room.room-bedroom {border-color:#7d9cdf52;}
+.house-room.room-garden {border-color:#7ce1b553;}
+.house-room.room-workshop {border-color:#f7d08d59;}
+.room-icon {display:grid;place-items:center;flex-shrink:0;width:58px;height:58px;font-size:31px;
+ border-radius:18px;background:linear-gradient(135deg,#344c70,#2f2c52);}
+.room-level {font-size:11px;white-space:nowrap;color:#a7f1de;font-weight:800;background:#22463e;
+ border-radius:13px;padding:7px 9px;}
+.room-tiers {display:flex;gap:8px;margin-top:15px;}
+.room-tiers span {display:block;height:6px;border-radius:30px;flex:1;background:#41506a;}
+.room-tiers span.on {background:linear-gradient(90deg,#67dbe0,#8df0a5);}
+.room-bonus {font-size:12px;color:#e4e4f9;font-weight:700;padding:11px 0 1px;line-height:1.55;}
+.room-complete {text-align:center;color:#86f2c2;font-size:12px;margin-top:14px;font-weight:800;}
+@media(max-width:390px) {
+ .house-illustration{font-size:108px;}
+ .house-ground{letter-spacing:5px;font-size:21px;}
+ .room-icon{width:48px;height:48px;font-size:27px;}
+}
+@media(prefers-reduced-motion:reduce){.house-scene * {animation:none;}}
