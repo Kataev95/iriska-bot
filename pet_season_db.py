@@ -104,6 +104,7 @@ class PetSeasonDatabase(PetLeagueDatabase):
             "season": {
                 "number": season_no, "start": start_day, "end": end_day,
                 "seconds_left": max(0, int(end - now)),
+                "end_ts": end,
             },
             "server_time": now,
             "my_score": int(mine["score"]) if mine else 0,
