@@ -103,7 +103,7 @@ async def run() -> None:
     status, bal = await db.adjust_balance(CHAT, USER1, -301, "списано админом", 999)
     assert status == "insufficient" and bal == 300, "ушли в минус"
 
-    status, bal = await db.adjust_balance(CHAT, USER1, -300, "списано админом (вывод)", 999)
+    status, bal = await db.adjust_balance(CHAT, USER1, -300, "игровая корректировка администратором", 999)
     assert status == "ok" and bal == 0
 
     status, _ = await db.adjust_balance(CHAT, 555, 10, "тест", 999)
@@ -363,15 +363,17 @@ async def run() -> None:
     summary = monthly_summary_text("2026-08", snapshots[0])
     assert "Август 2026 подошёл к концу" in summary
     assert "итоги августа 2026" in summary
-    assert "все накопленные ириски сгорели" in summary
+    assert "Все ириски и игровой прогресс сохранены" in summary
 
     for user_id in (USER1, USER2):
         row = await month_db.get_user(CHAT, user_id)
-        assert row["total_counted"] == 0 and row["balance"] == 0
-        assert row["earned_total"] == 0 and row["progress"] == 0
-        assert row["last_bonus_day"] is None and row["bonus_streak"] == 0
-        assert row["bonus_claimed_ts"] == 0 and row["bonus_claimed_amount"] == 0, \
-            "месячный сброс должен снимать бонус с наблюдения"
+        assert row["total_counted"] == 0
+        assert row["balance"] == (14 if user_id == USER1 else 7)
+        assert row["earned_total"] == (14 if user_id == USER1 else 7)
+        assert row["progress"] == (5 if user_id == USER1 else 3)
+        if user_id == USER1:
+            assert row["last_bonus_day"] == "2026-08-31" and row["bonus_streak"] == 1
+            assert row["bonus_claimed_ts"] == 8_000_250
     assert await month_db.user_count_since(CHAT, USER1, "2000-01-01") == 0
     assert not await month_db.has_pending_duel(CHAT, USER1)
     assert await month_db.close_stats_period(
@@ -1525,3 +1527,4 @@ async def run_bonus_watch() -> None:
 
 if __name__ == "__main__":
     asyncio.run(run())
+

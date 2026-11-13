@@ -131,12 +131,6 @@ async def build_profile(db: Database, config: Config, chat_id: int, row) -> str:
         blocked_until = float(row["bonus_blocked_until"] or 0.0)
         if blocked_until > time.time():
             lines.append(bonus_block_line(blocked_until, config))
-    if balance >= config.withdraw_threshold:
-        lines.append(f"✅ <b>Можно выводить!</b> Пиши {config.admin_contact}")
-    else:
-        need = config.withdraw_threshold - balance
-        lines.append(
-            f"📤 До вывода ({fmt(config.withdraw_threshold)}): "
-            f"ещё {fmt(need)} {iriski(need)}"
-        )
+    lines.append("🎮 Ириски сохраняются между месяцами и тратятся внутри бота.")
     return "\n".join(lines)
+

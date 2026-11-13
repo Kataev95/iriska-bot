@@ -1,16 +1,6 @@
-"""🐣 Общий питомец: двое растят питомца, переписываясь друг с другом каждый день.
+"""Общий питомец: серия общения и постоянный прогресс Питомцев 3.0.
 
-Как «огонёк» в TikTok:
-- ответь «питомец» на сообщение друга — он получит приглашение с кнопками;
-- дальше каждый день оба пишут друг другу в чате: ответом на сообщение
-  (текст, стикер, голосовое, фото — что угодно) или упоминанием @username;
-- день засчитан, когда написали ОБА: серия +1, питомец растёт;
-- пропустили день — питомец сбегает, серия сгорает. Вернуть её можно
-  за ириски в течение PET_RESTORE_HOURS: «вернуть питомца».
-
-Триггеры перехватываются до счётчика и в статистику не попадают, а сама
-переписка пары засчитывается и в статистику, и питомцу (хук track_pet_message
-вызывается из роутера подсчёта).
+Пропуск прерывает серию, но не уровень, лучший облик и имущество.
 """
 
 from __future__ import annotations
@@ -34,6 +24,7 @@ from aiogram.types import (
 from config import Config
 from db import Database
 from handlers.common import GroupF, mention, today_day, trig, yesterday_day
+from pet_game import growth_days, level_for
 from pets import (
     clean_name,
     next_stage,
@@ -63,50 +54,18 @@ RENAME_RE = re.compile(r"^\s*(?:назвать|имя)\s+питомца\s+(.+?)\
 # ---------- тексты ----------
 
 def rules_text(config: Config) -> str:
-    rewards = parse_rewards(config.pet_rewards)
-    lines = [
-        "🐣 <b>Общий питомец</b> — как огонёк в TikTok, только живой.",
-        "",
-        "1️⃣ Ответь <b>«питомец»</b> на сообщение друга — он получит яйцо-приглашение.",
-        "2️⃣ Каждый день пишите <b>друг другу</b>: ответом на сообщение "
-        "или упоминанием @username. Подойдёт текст, стикер, голосовое.",
-        "3️⃣ День засчитан, когда написали <b>оба</b> — серия растёт, "
-        "из яйца вылупится питомец и будет взрослеть:",
-        "🍼 Малыш (1 день) → 🎒 Подросток (7) → 💪 Взрослый (30) → 👑 Легенда (100)",
-        "4️⃣ Пропустили день — питомец сбегает, серия сгорает.",
-    ]
-    if config.pet_restore_hours > 0:
-        price = (
-            f"за {fmt(config.pet_restore_price)} 🍬"
-            if config.pet_restore_price > 0 else "бесплатно"
-        )
-        lines.append(
-            f"   Вернуть его можно {price} в течение "
-            f"{config.pet_restore_hours:g} ч: «вернуть питомца»."
-        )
-    if rewards:
-        parts = [f"{d} {days(d)} — {fmt(a)} 🍬" for d, a in sorted(rewards.items())]
-        lines.append("")
-        lines.append("🎁 Награды каждому за серию: " + ", ".join(parts))
-    lines.extend([
-        "",
-        "🐾 <b>Уход</b>: в карточке питомца («мой питомец») есть кнопки "
-        "🍖 покормить, 🎾 поиграть, 🛏 уложить. Сытость, настроение и энергия "
-        "падают со временем, а ночью питомец спит. Переписка пары тоже кормит.",
-        "🛒 <b>Магазин</b>: угощения, аксессуары 🎀🕶🌸🧣🎩, 🧊 заморозка серии "
-        "(спасает при пропуске дня) и 🏠 домик.",
-    ])
-    if config.pet_events_per_day > 0:
-        lines.append(
-            "🎲 <b>События</b>: пару раз в день с питомцем что-то случается — "
-            "монетка, посылка, бабочка, простуда. Успейте нажать!"
-        )
-    lines.extend([
-        "",
-        "Команды: «мой питомец», «топ питомцев», «назвать питомца Барсик», "
-        "«бросить питомца» (ответом партнёру, если питомцев несколько).",
-    ])
-    return "\n".join(lines)
+    return (
+        "🐾 <b>Питомцы 3.0: развитие и приключения</b>\n\n"
+        "Ответь другу «питомец» и дождись согласия. Первая взаимная переписка вылупит яйцо.\n"
+        "Уровень, лучший облик и вещи постоянны. Пропуск обнуляет только серию общения.\n"
+        "Открой «мой питомец»: уход, магазин, приключения и ежедневные задания.\n"
+        "🧭 Парк — 15 минут, лес — 2 часа, руины — 8 часов. Один поход на питомца; "
+        "до 3 стартов в день на хозяина во всех чатах. Награда ждёт возвращения.\n"
+        "⭐ На 5-м уровне выбери профессию. XP общий, ириски похода получает отправитель.\n"
+        "📋 Задания: уход, завершённый поход, участие обоих хозяев. Обновляются в полночь по времени бота.\n"
+        "🍬 Ириски — валюта только этого бота, без вывода и месячного сгорания.\n"
+        "Команды: «мой питомец», «топ питомцев», «назвать питомца Барсик»."
+    )
 
 
 def _who(rows: dict, uid: int) -> str:
@@ -133,9 +92,9 @@ def pet_card(pet, me: int, names: dict, config: Config, today: str) -> str:
         lines.append(f"   🔥 Серия: <b>{streak}</b> {days(streak)} • {stage_line(streak)}")
     elif int(pet["lost_streak"]) > 0:
         lost = int(pet["lost_streak"])
-        lines.append(f"   💔 Сбежал! Серия {lost} {days(lost)} сгорела — «вернуть питомца»")
+        lines.append(f"   🏡 Серия {lost} {days(lost)} завершена. Питомец и вещи сохранены.")
     elif int(pet["best_streak"]) > 0:
-        lines.append("   💔 Убежал — напишите друг другу, и он вернётся малышом")
+        lines.append("   🏡 Дома. Уровень и вещи сохранены; начните новую серию общения")
     else:
         lines.append("   🥚 Ждёт первого дня переписки, чтобы вылупиться")
     if pet["last_fed_day"] == today:
@@ -241,7 +200,7 @@ async def cmd_pet(message: Message, db: Database, config: Config) -> None:
         f"{mention(target.id, target.first_name, target.username)} завести "
         "<b>общего питомца</b>!\n\n"
         "Пишите друг другу каждый день — он вылупится и будет расти. "
-        "Пропустите день — сбежит.\n"
+        "Пропуск прерывает только серию: питомец и вещи сохраняются.\n"
         f"Приглашение действует {minutes} мин.",
         reply_markup=invite_keyboard(int(pet["id"])),
     )
@@ -340,7 +299,7 @@ async def cmd_pet_top(message: Message, db: Database, config: Config) -> None:
     lines = ["🏆 <b>Топ питомцев чата</b>", ""]
     for i, p in enumerate(top, 1):
         streak = int(p["streak"])
-        tail = f"🔥 {streak} {days(streak)}" if streak else "💔 сбежал"
+        tail = f"⭐ Уровень {level_for(p['xp'])} • {p['xp']} XP • 🔥 {streak} {days(streak)}"
         lines.append(
             f"{place(i)} {pet_title(p)} — {_plain(names, p['user_a'])} и "
             f"{_plain(names, p['user_b'])} • {tail}"
@@ -388,33 +347,7 @@ async def cmd_restore(message: Message, db: Database, config: Config) -> None:
     if pet is None:
         await message.reply(error)
         return
-    if config.pet_restore_hours <= 0:
-        await message.reply("Возвращать сбежавших питомцев в этом чате нельзя 😔")
-        return
-    status, balance, pet = await db.restore_pet(
-        int(pet["id"]), user.id, max(config.pet_restore_price, 0), time.time(),
-        config.pet_restore_seconds, yesterday_day(config),
-    )
-    if status == "nothing":
-        await message.reply("Питомец никуда не сбегал — возвращать некого 🙂")
-    elif status == "expired":
-        await message.reply(
-            f"⌛ Поздно: вернуть питомца можно было в течение "
-            f"{config.pet_restore_hours:g} ч. Начните серию заново — пишите друг другу!"
-        )
-    elif status == "insufficient":
-        need = config.pet_restore_price - balance
-        await message.reply(
-            f"Не хватает {fmt(need)} {iriski(need)}: возвращение стоит "
-            f"{fmt(config.pet_restore_price)} 🍬, на балансе {fmt(balance)}."
-        )
-    else:
-        streak = int(pet["streak"])
-        await message.reply(
-            f"🩹 {pet_title(pet)} вернулся! Серия 🔥 <b>{streak}</b> {days(streak)} "
-            f"спасена (списано {fmt(config.pet_restore_price)} 🍬, баланс "
-            f"{fmt(balance)}).\nНе забудьте написать друг другу сегодня!"
-        )
+    await message.reply("🏡 В Питомцах 3.0 питомец остаётся дома: уровень, облик и вещи сохраняются. Открой «мой питомец».")
 
 
 @router.message(GroupF, trig(ABANDON_TRIGGERS))
@@ -506,7 +439,7 @@ def fed_photo_key(event: dict) -> str | None:
     sp = species_by_code(pet["species"]).code
     if int(event["prev_best"]) <= 0:
         return f"{sp}_baby"
-    stage = stage_for(streak)
+    stage = stage_for(growth_days(pet))
     if stage is not None and stage.min_streak == streak and streak > 1:
         return f"{sp}_{stage.code}"
     return None
@@ -529,7 +462,7 @@ async def fed_text(db: Database, event: dict) -> str:
     else:
         lines.append(f"{pet_title(pet)} накормлен 🍖")
     lines.append(f"🔥 {pair}: серия <b>{streak}</b> {days(streak)}")
-    stage = stage_for(streak)
+    stage = stage_for(growth_days(pet))
     if stage is not None and stage.min_streak == streak and streak > 1:
         lines.append(f"✨ Питомец подрос — теперь он <b>{stage.title}</b> {stage.badge}!")
     if event["reward"]:
@@ -589,27 +522,10 @@ async def process_pet_day(
     for chat_id, pets in by_chat.items():
         ids = sorted({p["user_a"] for p in pets} | {p["user_b"] for p in pets})
         names = await db.user_names(chat_id, ids)
-        lines = ["💔 <b>Питомцы сбежали…</b>", ""]
+        lines = ["🏡 <b>Новый старт серии общения</b>", ""]
         for p in pets:
-            n = int(p["lost_streak"])
-            lines.append(
-                f"{pet_title(p)} — {_who(names, p['user_a'])} и "
-                f"{_who(names, p['user_b'])} вчера не переписывались. "
-                f"Серия {n} {days(n)} сгорела."
-            )
-        if config.pet_restore_hours > 0:
-            price = (
-                f"за {fmt(config.pet_restore_price)} 🍬"
-                if config.pet_restore_price > 0 else "бесплатно"
-            )
-            lines.extend([
-                "",
-                f"🩹 Вернуть серию можно {price} в течение "
-                f"{config.pet_restore_hours:g} ч: ответьте партнёру «вернуть питомца».",
-            ])
-        from handlers.pet_menu import send_pet_photo
-
-        await send_pet_photo(bot, db, chat_id, "runaway", "\n".join(lines))
+            lines.append(f"{pet_title(p)} — серия прервалась, но питомец, опыт и вещи сохранены.")
+        await _send(bot, chat_id, "\n".join(lines))
 
     reminded = 0
     if 0 <= config.pet_remind_hour <= 23 and now.hour >= config.pet_remind_hour:
@@ -622,8 +538,8 @@ async def process_pet_day(
             ids = sorted({p["user_a"] for p in pets} | {p["user_b"] for p in pets})
             names = await db.user_names(chat_id, ids)
             lines = [
-                "⏳ <b>Питомцы проголодались!</b> До полуночи напишите друг другу, "
-                "иначе серия сгорит:",
+                "⏳ <b>Совместное задание:</b> напишите друг другу до полуночи, "
+                "чтобы продолжить серию. Уровень и вещи сохраняются в любом случае:",
                 "",
             ]
             for p in pets:
@@ -659,3 +575,4 @@ async def pet_keeper(bot: Bot, db: Database, config: Config) -> None:
         except Exception:
             logger.exception("Ошибка смотрителя питомцев")
         await asyncio.sleep(30)
+

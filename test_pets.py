@@ -154,7 +154,7 @@ async def check_handlers() -> None:
 
     from config import load_config
     from handlers import (
-        admin_router, counting_router, games_router, pet_menu_router, pets_router,
+        admin_router, counting_router, games_router, pet_menu_router, pets_router, pet_game_router,
         quiz_router, shop_router, user_router,
     )
     from handlers.pet_menu import process_pet_events
@@ -218,7 +218,7 @@ async def check_handlers() -> None:
     bot = Bot(token="123456:test", session=session)
     dp = Dispatcher(db=db, config=cfg)
     for r in (admin_router, quiz_router, user_router, shop_router, games_router,
-              pets_router, pet_menu_router, counting_router):
+              pets_router, pet_game_router, pet_menu_router, counting_router):
         dp.include_router(r)
 
     def user(uid: int) -> User:
@@ -277,7 +277,7 @@ async def check_handlers() -> None:
         b1, _ = await say(B, "и тебе")
         # Без ответа «питомец» показывает правила
         _, out = await say(A, "питомец")
-        assert "Общий питомец" in out[0].text
+        assert "Питомцы 3.0" in out[0].text
         # Ответом — приглашение с кнопками
         _, out = await say(A, "Питомец!", reply_to=b1)
         assert len(out) == 1 and out[0].reply_markup is not None
@@ -337,20 +337,22 @@ async def check_handlers() -> None:
         await db_.commit()
         sent_before = len(session.sent)
         lost, _ = await process_pet_day(bot, db, cfg, now=datetime.datetime.now(cfg.tz).replace(hour=10))
-        assert lost == 1 and "сбежали" in body(session.sent[sent_before])
-        assert isinstance(session.sent[sent_before], SendPhoto), "фото «сбежал»"
+        assert lost == 1 and "Новый старт серии" in body(session.sent[sent_before])
+        assert "опыт и вещи сохранены" in body(session.sent[sent_before])
         # Вернуть за ириски (у A 3 🍬 награды, цена 20 — не хватает)
         _, out = await say(A, "вернуть питомца")
-        assert "Не хватает" in out[0].text
+        assert "остаётся дома" in out[0].text
         await db.adjust_balance(CHAT, A, 50, "тест", None)
         _, out = await say(A, "вернуть питомца")
-        assert "вернулся" in out[0].text and "<b>2</b>" in out[0].text
+        assert "остаётся дома" in out[0].text
+        await db_.execute("UPDATE pets SET streak=2,last_fed_day=? WHERE id=?", (yesterday,pet["id"]))
+        await db_.commit()
 
         # Напоминание вечером
         sent_before = len(session.sent)
         _, reminded = await process_pet_day(
             bot, db, cfg, now=datetime.datetime.now(cfg.tz).replace(hour=21))
-        assert reminded == 1 and "проголодались" in body(session.sent[sent_before])
+        assert reminded == 1 and "Совместное задание" in body(session.sent[sent_before])
         _, reminded = await process_pet_day(
             bot, db, cfg, now=datetime.datetime.now(cfg.tz).replace(hour=22))
         assert reminded == 0, "раз в день"
@@ -373,8 +375,30 @@ async def check_handlers() -> None:
         await db.adjust_balance(CHAT, A, 5, "тест: возврат", None, earned=0)
         assert (await db.get_user(CHAT, A))["earned_total"] == earned
 
-        await check_menu(db, cfg, pet["id"], say, press, body, session,
-                         process_pet_day, process_pet_events, bot)
+        # Freeze the callback clock too: event fixtures are created at noon.
+        fixed_now = datetime.datetime.now(cfg.tz).replace(hour=12, minute=0, second=0, microsecond=0).timestamp()
+        with mock.patch.object(time_module(), "time", lambda: fixed_now):
+            await check_menu(db, cfg, pet["id"], say, press, body, session,
+                             process_pet_day, process_pet_events, bot)
+
+        # Новые callbacks проходят настоящий Dispatcher.
+        pid = int(pet["id"])
+        edits, answers = await press(A, f"pg:menu:{pid}")
+        assert "Питомцы 3.0" in body(edits[0]) and "Парк" in body(edits[0])
+        edits, answers = await press(C, f"pg:start:{pid}:park")
+        assert answers[0].show_alert and not edits
+        await db.update_pet(pid,food=80,energy=100,care_ts=__import__('time').time())
+        edits, answers = await press(A, f"pg:start:{pid}:park")
+        assert "отправился" in body(edits[0])
+        trip = await db.active_trip(pid)
+        await db_.execute("UPDATE pet_trips SET finish_at=0 WHERE id=?", (trip["id"],))
+        await db_.commit()
+        edits, answers = await press(B, f"pg:claim:{pid}:{trip['id']}")
+        assert "отправившему" in body(edits[0])
+        edits, answers = await press(A, f"pg:tasks:{pid}")
+        assert "Забрать награду похода" in body(edits[0])
+        edits, answers = await press(A, f"pg:daily:{pid}")
+        assert "XP питомцу за задания" in body(edits[0])
 
         # Отпустить — с подтверждением
         _, out = await say(B, "бросить питомца")
@@ -553,3 +577,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

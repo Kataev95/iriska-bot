@@ -28,6 +28,7 @@ from handlers import (
     counting_router,
     games_router,
     pet_menu_router,
+    pet_game_router,
     pets_router,
     quiz_router,
     shop_router,
@@ -211,7 +212,6 @@ async def set_commands(bot: Bot, config: Config) -> None:
         BotCommand(command="pettop", description="Топ питомцев чата"),
         BotCommand(command="shop", description="Магазин за ириски 🛍"),
         BotCommand(command="hours", description="Бонусные часы ⏰"),
-        BotCommand(command="withdraw", description="Вывести ириски"),
         BotCommand(command="help", description="Как это работает"),
     ]
     private_cmds = [
@@ -275,6 +275,7 @@ async def main() -> None:
     dp.include_router(shop_router)
     dp.include_router(games_router)
     dp.include_router(pets_router)
+    dp.include_router(pet_game_router)
     dp.include_router(pet_menu_router)
     dp.include_router(counting_router)
 
@@ -318,3 +319,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         pass
+

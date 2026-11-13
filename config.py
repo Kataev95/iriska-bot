@@ -139,7 +139,6 @@ class Config:
     cooldown_seconds: float
     dedupe_repeats: bool
     messages_per_iriska: int
-    withdraw_threshold: int
     bonus_enabled: bool
     bonus_min: int
     bonus_max: int
@@ -240,7 +239,6 @@ def load_config() -> Config:
         cooldown_seconds=_float_env("COOLDOWN_SECONDS", 0.0),
         dedupe_repeats=_bool_env("DEDUPE_REPEATS", False),
         messages_per_iriska=_int_env("MESSAGES_PER_IRISKA", 100),
-        withdraw_threshold=_int_env("WITHDRAW_THRESHOLD", 300),
         bonus_enabled=_bool_env("BONUS_ENABLED", True),
         bonus_min=_int_env("BONUS_MIN", 1),
         bonus_max=_int_env("BONUS_MAX", 2),
@@ -287,3 +285,4 @@ def load_config() -> Config:
         pet_event_ttl_hours=_float_env("PET_EVENT_TTL_HOURS", 2.0),
         pet_outage_grace_hours=_float_env("PET_OUTAGE_GRACE_HOURS", 6.0),
     )
+
