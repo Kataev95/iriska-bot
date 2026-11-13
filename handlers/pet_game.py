@@ -246,7 +246,7 @@ async def on_game(callback: CallbackQuery, db: Database, config: Config) -> None
         completed, claimed = {}, set()
 
     trip = await db.active_trip(pid) if render_action in TRIP_ACTIONS else None
-    lines = [f"{pet_title(pet)} · {experience_line(pet)}"]
+    lines = [f"{pet_title(pet)} · Питомцы 3.0 · {experience_line(pet)}"]
     if note:
         lines.append(escape(note))
     if render_action in TASK_ACTIONS:
