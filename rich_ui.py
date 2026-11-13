@@ -99,6 +99,7 @@ async def send_rich(
             chat_id, text, reply_markup=reply_markup,
             reply_parameters=reply_parameters,
             disable_notification=disable_notification,
+            **kwargs,
         )
     doc = html or panel_html(text)
     try:
@@ -124,6 +125,7 @@ async def send_rich(
             chat_id, text, reply_markup=reply_markup,
             reply_parameters=reply_parameters,
             disable_notification=disable_notification,
+            **kwargs,
         )
 
 
