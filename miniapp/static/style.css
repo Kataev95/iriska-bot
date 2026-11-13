@@ -92,3 +92,49 @@ button{font:inherit;cursor:pointer} button:disabled{cursor:not-allowed;opacity:.
   outline:2px solid var(--cyan);outline-offset:3px
 }
 @media (min-width:450px){.care-button span{font-size:13px}}
+
+
+/* PETS 1.2: tactile character and rewards, without changing the fullscreen layout */
+.hero { isolation:isolate; }
+.hero img { transition:transform .35s ease-out; }
+.hero.pet-waving img { transform:scale(1.045) rotate(-.65deg); }
+.pet-touch { position:absolute;inset:0;display:block;border:0;background:transparent;
+  width:100%;height:100%;padding:0;z-index:2;color:#3e4170;touch-action:manipulation; }
+.pet-touch:focus-visible { outline:3px solid #53cfc3;outline-offset:-5px;border-radius:25px; }
+.pet-hint { position:absolute;right:12px;bottom:13px;border-radius:99px;
+  background:rgba(255,255,255,.89);padding:7px 11px;font-size:11px;font-weight:800;
+  color:#43506b;box-shadow:0 4px 16px rgba(38,45,70,.13); }
+.hero-overlay { z-index:3;pointer-events:none; }
+.effects-layer { position:fixed;inset:0;z-index:11;pointer-events:none;
+  display:grid;place-items:center;overflow:hidden; }
+.effect-card { z-index:2;position:absolute;max-width:85vw;padding:17px 22px;
+  text-align:center;border:1px solid #a2f5e2;border-radius:22px;color:#fdfaff;
+  font-size:18px;font-weight:800;letter-spacing:.01em;
+  background:linear-gradient(125deg,rgba(60,67,134,.97),rgba(26,67,84,.98));
+  box-shadow:0 14px 45px rgba(7,16,36,.7),0 0 30px rgba(83,229,202,.18);
+  animation:effect-arrive 1.8s cubic-bezier(.18,.8,.18,1) both; }
+.effect-level { font-size:21px;border-color:#ffdb7e;
+  background:linear-gradient(120deg,#6e4b96,#8c659b,#ac824a); }
+.effect-reward { border-color:#ffe4a2; }
+.effect-particle { position:absolute;font-size:18px;opacity:0;
+  animation:effect-burst 1.35s ease-out both;
+  transform:rotate(var(--particle-angle)); }
+@keyframes effect-arrive {
+  0% { opacity:0; transform:translateY(28px) scale(.7); }
+  17%,67% { opacity:1; transform:translateY(0) scale(1); }
+  100% { opacity:0; transform:translateY(-25px) scale(1.03); }
+}
+@keyframes effect-burst {
+  0% { opacity:0; transform:rotate(var(--particle-angle)) translateY(0) scale(.3); }
+  18% { opacity:1; }
+  80% { opacity:1; }
+  100% { opacity:0;transform:rotate(var(--particle-angle)) translateY(calc(-1 * var(--particle-distance))) scale(.85); }
+}
+.task-summary { background:linear-gradient(145deg,rgba(71,62,126,.42),rgba(25,42,63,.87)); }
+.task-progress { height:9px;margin-top:14px; }
+.task-summary .subtitle { margin:10px 0 0;font-size:11px; }
+@media(prefers-reduced-motion:reduce) {
+  .hero img { transition:none; }
+  .effect-card { animation:none; }
+  .effect-particle { display:none; }
+}
