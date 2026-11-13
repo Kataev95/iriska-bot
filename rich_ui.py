@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from html import escape
 from typing import Any
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class _SendRich(TelegramMethod[Message]):
+    __returning__ = Message
     __returning_type__ = Message
     __api_method__ = "sendRichMessage"
 
@@ -26,6 +28,7 @@ class _SendRich(TelegramMethod[Message]):
 
 
 class _EditRich(TelegramMethod[Message]):
+    __returning__ = Message
     __returning_type__ = Message
     __api_method__ = "editMessageText"
 
@@ -91,6 +94,12 @@ async def send_rich(
         reply_parameters = ReplyParameters(
             message_id=reply_to_message_id, allow_sending_without_reply=True,
         )
+    if os.environ.get('RICH_MESSAGES_ENABLED', '1') == '0':
+        return await bot.send_message(
+            chat_id, text, reply_markup=reply_markup,
+            reply_parameters=reply_parameters,
+            disable_notification=disable_notification,
+        )
     doc = html or panel_html(text)
     try:
         return await bot(_SendRich(
@@ -138,6 +147,12 @@ async def edit_rich_by_id(
     image_url: str | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> bool:
+    if os.environ.get('RICH_MESSAGES_ENABLED', '1') == '0':
+        await bot.edit_message_text(
+            text, chat_id=chat_id, message_id=message_id,
+            reply_markup=reply_markup,
+        )
+        return True
     doc = html or panel_html(text)
     try:
         await bot(_EditRich(
