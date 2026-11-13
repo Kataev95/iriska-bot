@@ -10,6 +10,7 @@ import logging
 import time
 from datetime import datetime
 
+from rich_ui import send_rich
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -80,7 +81,7 @@ async def bonus_hours_announcer(bot: Bot, db: Database, config: Config) -> None:
                 )
                 for chat_id in await db.known_chats():
                     try:
-                        await bot.send_message(chat_id, text)
+                        await send_rich(bot, chat_id, text)
                     except Exception as e:  # выгнали из чата и т.п. — не падаем
                         logger.warning("Анонс в чат %s не ушёл: %s", chat_id, e)
             in_window = now_in
@@ -158,7 +159,7 @@ async def process_bonus_watch(
         if not config.bonus_revoke_notice:
             continue
         try:
-            await bot.send_message(
+            await send_rich(bot, 
                 chat_id,
                 bonus_revoked_text(
                     user_id, row["first_name"], row["username"],

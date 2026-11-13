@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from rich_ui import reply_rich
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
@@ -79,12 +80,12 @@ async def _give(message: Message, db: Database, row, amount: int, admin_id: int)
     )
     name = display_name(row["first_name"], row["username"])
     if status == "ok":
-        await message.reply(
+        await reply_rich(message, 
             f"✅ Начислено 🍬 <b>{fmt(amount)}</b> — {name}.\n"
             f"Баланс: <b>{fmt(balance)}</b> {iriski(balance)}"
         )
     else:
-        await message.reply("Не получилось — участник не найден.")
+        await reply_rich(message, "Не получилось — участник не найден.")
 
 
 async def _take(message: Message, db: Database, row, amount: int, admin_id: int) -> None:
@@ -93,17 +94,17 @@ async def _take(message: Message, db: Database, row, amount: int, admin_id: int)
     )
     name = display_name(row["first_name"], row["username"])
     if status == "ok":
-        await message.reply(
+        await reply_rich(message, 
             f"✅ Списано 🍬 <b>{fmt(amount)}</b> у {name}.\n"
             f"Остаток: <b>{fmt(balance)}</b> {iriski(balance)}"
         )
     elif status == "insufficient":
-        await message.reply(
+        await reply_rich(message, 
             f"⚠️ У {name} только 🍬 <b>{fmt(balance)}</b> — "
             f"списать {fmt(amount)} не выйдет."
         )
     else:
-        await message.reply("Не получилось — участник не найден.")
+        await reply_rich(message, "Не получилось — участник не найден.")
 
 
 @router.message(GroupF, Command("give"))
@@ -111,11 +112,11 @@ async def cmd_give(message: Message, command: CommandObject, db: Database, confi
     args = (command.args or "").split()
     row, args, err = await _resolve_target(message, db, args)
     if err:
-        await message.reply(err)
+        await reply_rich(message, err)
         return
     amount = _parse_amount(args)
     if amount is None:
-        await message.reply(
+        await reply_rich(message, 
             "Укажи количество: <code>/give 50</code> (ответом на сообщение) "
             "или <code>/give @user 50</code>"
         )
@@ -128,11 +129,11 @@ async def cmd_take(message: Message, command: CommandObject, db: Database, confi
     args = (command.args or "").split()
     row, args, err = await _resolve_target(message, db, args)
     if err:
-        await message.reply(err)
+        await reply_rich(message, err)
         return
     amount = _parse_amount(args)
     if amount is None:
-        await message.reply(
+        await reply_rich(message, 
             "Укажи количество: <code>/take 300</code> (ответом на сообщение) "
             "или <code>/take @user 300</code>"
         )
@@ -149,11 +150,11 @@ async def admin_text_ops(message: Message, db: Database, config: Config) -> None
     word = match.group(1).lower()
     amount = int(match.group(2))
     if not 1 <= amount <= MAX_AMOUNT:
-        await message.reply("Слишком много 😅")
+        await reply_rich(message, "Слишком много 😅")
         return
     row, _, err = await _resolve_target(message, db, [])
     if err:
-        await message.reply(
+        await reply_rich(message, 
             "Ответь «начислить N» или «списать N» на сообщение участника."
         )
         return
@@ -169,9 +170,9 @@ async def cmd_who(message: Message, command: CommandObject, db: Database, config
     args = (command.args or "").split()
     row, _, err = await _resolve_target(message, db, args)
     if err:
-        await message.reply(err)
+        await reply_rich(message, err)
         return
-    await message.reply(await build_profile(db, config, message.chat.id, row))
+    await reply_rich(message, await build_profile(db, config, message.chat.id, row))
 
 
 # ---------- заказы магазина ----------
@@ -214,7 +215,7 @@ async def cmd_orders(message: Message, command: CommandObject, db: Database, con
     show_all = (command.args or "").strip().lower() in {"all", "все", "всё"}
     orders = await db.list_orders(message.chat.id, "new" if not show_all else "", 20)
     if not orders:
-        await message.reply(
+        await reply_rich(message, 
             "Заказов нет 🎉" if show_all else "Новых заказов нет 🎉"
         )
         return
@@ -227,7 +228,7 @@ async def cmd_orders(message: Message, command: CommandObject, db: Database, con
             "Закрыть: <code>/order_done 12</code> • "
             "Вернуть ириски: <code>/order_refund 12</code>",
         ])
-    await message.reply("\n".join(lines))
+    await reply_rich(message, "\n".join(lines))
 
 
 async def _order_action(
@@ -236,7 +237,7 @@ async def _order_action(
     args = (raw_args or "").split()
     if not args or not args[0].lstrip("#").isdigit():
         cmd = "order_refund" if refund else "order_done"
-        await message.reply(
+        await reply_rich(message, 
             f"Укажи номер заказа: <code>/{cmd} 12</code> "
             "(номер виден в /orders)"
         )
@@ -247,21 +248,21 @@ async def _order_action(
             order_id, message.chat.id, message.from_user.id
         )
         if status == "ok":
-            await message.reply(
+            await reply_rich(message, 
                 f"↩️ Заказ №{order_id} отменён, ириски вернулись покупателю.\n"
                 f"Его баланс: <b>{fmt(balance)}</b> {iriski(balance)}"
             )
         else:
-            await message.reply(
+            await reply_rich(message, 
                 f"Заказ №{order_id} не найден среди новых — "
                 "проверь номер в /orders"
             )
         return
     done = await db.complete_order(order_id, message.chat.id, message.from_user.id)
     if done:
-        await message.reply(f"✅ Заказ №{order_id} отмечен выполненным")
+        await reply_rich(message, f"✅ Заказ №{order_id} отмечен выполненным")
     else:
-        await message.reply(
+        await reply_rich(message, 
             f"Заказ №{order_id} не найден среди новых — проверь номер в /orders"
         )
 
@@ -298,25 +299,25 @@ async def cmd_pet_amnesty(
     from pet_amnesty import apply, backup_database, preview
 
     if message.from_user is None or message.from_user.id not in config.admin_ids:
-        await message.reply(
+        await reply_rich(message, 
             "🔒 Эта операция доступна только ID из ADMIN_IDS. "
             "Узнай свой ID командой /id и добавь его в настройки бота."
         )
         return
     if message.chat.type != "private":
-        await message.reply("🔒 Запусти /pet_amnesty в личке бота.")
+        await reply_rich(message, "🔒 Запусти /pet_amnesty в личке бота.")
         return
 
     info = await preview(db)
     if info["applied"]:
-        await message.reply(
+        await reply_rich(message, 
             "✅ Амнистия за ноябрь 2026 уже была проведена. "
             "Второй раз 100 ирисок не начисляю.\n"
             f"Отметка: <code>{escape(str(info['marker']))}</code>"
         )
         return
     if info["pets"] == 0:
-        await message.reply(
+        await reply_rich(message, 
             "⚠️ В этой базе нет ни одного активного питомца. "
             "Начисления не делал. Проверь DB_PATH и подключённый постоянный "
             "том с прежней базой данных."
@@ -324,7 +325,7 @@ async def cmd_pet_amnesty(
         return
 
     if (command.args or "").strip() != "APPLY_2026_11":
-        await message.reply(
+        await reply_rich(message, 
             "🐾 <b>Амнистия питомцев за простой бота</b>\n\n"
             f"Всего активных питомцев (включая яйца): <b>{info['pets']}</b>\n"
             f"Сбежавших сейчас: <b>{info['away']}</b>\n"
@@ -345,7 +346,7 @@ async def cmd_pet_amnesty(
     try:
         backup_path = await backup_database(db)
     except Exception:
-        await message.reply(
+        await reply_rich(message, 
             "❌ Не удалось сделать резервную копию базы. "
             "Амнистию НЕ запускал. Проверь свободное место и права на каталог БД."
         )
@@ -354,18 +355,18 @@ async def cmd_pet_amnesty(
     try:
         result = await apply(db, config, message.from_user.id)
     except Exception:
-        await message.reply(
+        await reply_rich(message, 
             "❌ Во время операции произошла ошибка, транзакция отменена. "
             f"Резервная копия: <code>{escape(backup_path)}</code>"
         )
         return
     if result["status"] != "ok":
-        await message.reply(
+        await reply_rich(message, 
             "Амнистия не выполнена (уже применена или нет питомцев). "
             f"Копия: <code>{escape(backup_path)}</code>"
         )
         return
-    await message.reply(
+    await reply_rich(message, 
         "✅ <b>Амнистия проведена!</b>\n"
         f"🐾 Возвращено сбежавших: <b>{result['restored']}</b>\n"
         f"🛡 Сохранено серий живых питомцев: <b>{result['protected']}</b>\n"

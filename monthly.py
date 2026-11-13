@@ -7,6 +7,7 @@ import calendar
 import logging
 from datetime import datetime
 
+from rich_ui import send_rich
 from aiogram import Bot
 
 from config import Config
@@ -115,7 +116,7 @@ async def process_month_boundary(
     for snapshot in snapshots:
         chat_id = int(snapshot["chat_id"])
         try:
-            await bot.send_message(
+            await send_rich(bot, 
                 chat_id, monthly_summary_text(stored_period, snapshot)
             )
         except Exception as exc:

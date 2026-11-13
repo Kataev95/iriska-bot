@@ -18,6 +18,7 @@ import logging
 import time
 from html import escape
 
+from rich_ui import answer_rich, reply_rich, send_rich
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject
@@ -68,7 +69,7 @@ async def resume_queues(bot: Bot, db: Database) -> None:
         if row is None:
             continue
         try:
-            await bot.send_message(
+            await send_rich(bot, 
                 chat_id,
                 quiz_text(row["question"], row["prize"], row["seq"], row["total"]),
             )
@@ -135,18 +136,18 @@ def quiz_text(question: str, prize: int, seq: int = 1, total: int = 1) -> str:
 async def cmd_quiz(message: Message, command: CommandObject, db: Database, bot: Bot) -> None:
     items, bad = parse_quiz_pack(command.args or "")
     if bad:
-        await message.reply(
+        await reply_rich(message, 
             "⚠️ Не понял строки: " + ", ".join(map(str, bad)) +
             ".\nФормат каждой строки: <code>Вопрос | ответ</code> — поправь и пришли заново."
         )
         return
     if not items:
-        await message.reply(USAGE)
+        await reply_rich(message, USAGE)
         return
 
     chats = await db.known_chats()
     if not chats:
-        await message.reply(
+        await reply_rich(message, 
             "Я пока не вёл статистику ни в одном чате — добавь меня в группу, "
             "и пусть там напишут пару сообщений."
         )
@@ -165,7 +166,7 @@ async def cmd_quiz(message: Message, command: CommandObject, db: Database, bot: 
         if row is None:
             continue
         try:
-            await bot.send_message(
+            await send_rich(bot, 
                 chat_id,
                 quiz_text(row["question"], row["prize"], row["seq"], row["total"]),
             )
@@ -188,12 +189,12 @@ async def cmd_quiz(message: Message, command: CommandObject, db: Database, bot: 
             "⚠️ В чате уже шла викторина — новые вопросы добавлены в очередь."
         )
     lines.append("Пропустить вопрос: /quizskip • Остановить всё: /quizstop")
-    await message.reply("\n".join(lines))
+    await reply_rich(message, "\n".join(lines))
 
 
 @router.message(GroupF, Command("quiz"))
 async def cmd_quiz_in_group(message: Message) -> None:
-    await message.reply(
+    await reply_rich(message, 
         "Викторины создаются в личке, чтобы не спалить ответ 😉 "
         "Напиши мне /quiz в ЛС."
     )
@@ -216,13 +217,13 @@ async def cmd_quizskip(message: Message, db: Database, bot: Bot) -> None:
         skipped += 1
         nxt = await db.activate_next_quiz(chat_id, now)
         try:
-            await bot.send_message(
+            await send_rich(bot, 
                 chat_id,
                 "⏭ Вопрос пропущен. Ответ был: "
                 f"<b>{escape(quiz['display_answer'])}</b>",
             )
             if nxt is not None:
-                await bot.send_message(
+                await send_rich(bot, 
                     chat_id,
                     quiz_text(nxt["question"], nxt["prize"], nxt["seq"], nxt["total"]),
                 )
@@ -232,16 +233,16 @@ async def cmd_quizskip(message: Message, db: Database, bot: Bot) -> None:
             active_chats.discard(chat_id)
 
     if skipped:
-        await message.reply(f"⏭ Пропущено вопросов: {skipped}")
+        await reply_rich(message, f"⏭ Пропущено вопросов: {skipped}")
     else:
-        await message.reply("Активных викторин нет.")
+        await reply_rich(message, "Активных викторин нет.")
 
 
 @router.message(Command("quizstop"))
 async def cmd_quizstop(message: Message, db: Database, bot: Bot) -> None:
     actives, queued = await db.cancel_active_quizzes(time.time())
     if not actives and queued == 0:
-        await message.reply("Активных викторин нет.")
+        await reply_rich(message, "Активных викторин нет.")
         return
     for row in actives:
         chat_id = int(row["chat_id"])
@@ -253,13 +254,13 @@ async def cmd_quizstop(message: Message, db: Database, bot: Bot) -> None:
         if queued:
             text += "\nОчередь вопросов очищена."
         try:
-            await bot.send_message(chat_id, text)
+            await send_rich(bot, chat_id, text)
         except Exception as e:
             logger.warning("Не смог сообщить об остановке в чат %s: %s", chat_id, e)
     parts = [f"Остановлено викторин: {len(actives)}"]
     if queued:
         parts.append(f"удалено из очереди: {queued}")
-    await message.reply(", ".join(parts) + ".")
+    await reply_rich(message, ", ".join(parts) + ".")
 
 
 async def handle_possible_answer(message: Message, db: Database) -> None:
@@ -281,7 +282,7 @@ async def handle_possible_answer(message: Message, db: Database) -> None:
     )
     if status != "ok":
         return  # кто-то успел на мгновение раньше
-    await message.reply(
+    await reply_rich(message, 
         f"🎉 <b>Правильно!</b> {display_name(user.first_name, user.username)} "
         f"первым дал верный ответ («{escape(quiz['display_answer'])}») "
         f"и получает 🍬 <b>+{fmt(prize)}</b>!\n"
@@ -295,13 +296,13 @@ async def handle_possible_answer(message: Message, db: Database) -> None:
         remaining_done = quiz["total"] > 1 and quiz["seq"] == quiz["total"]
         if remaining_done:
             try:
-                await message.answer("🏁 Викторина окончена — все вопросы отыграны!")
+                await answer_rich(message, "🏁 Викторина окончена — все вопросы отыграны!")
             except Exception:
                 pass
         return
     await asyncio.sleep(NEXT_QUESTION_DELAY)
     try:
-        await message.answer(
+        await answer_rich(message, 
             quiz_text(nxt["question"], nxt["prize"], nxt["seq"], nxt["total"])
         )
     except Exception as e:

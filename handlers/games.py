@@ -12,6 +12,7 @@ import re
 import secrets
 import time
 
+from rich_ui import reply_rich
 from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, CommandObject
@@ -90,7 +91,7 @@ async def cmd_bonus(
     if user is None or user.is_bot:
         return
     if not config.bonus_enabled:
-        await message.reply("Ежедневные бонусы сейчас выключены.")
+        await reply_rich(message, "Ежедневные бонусы сейчас выключены.")
         return
     now_ts = time.time()
     # Блокировка за отписки проверяется до похода в Telegram: человек должен
@@ -98,7 +99,7 @@ async def cmd_bonus(
     if config.bonus_abuse_limit > 0:
         until = await db.bonus_block_until(message.chat.id, user.id, now_ts)
         if until > 0:
-            await message.reply(bonus_blocked_text(user, until, config))
+            await reply_rich(message, bonus_blocked_text(user, until, config))
             return
     # Бонус только для подписчиков канала (если задан CHANNEL_ID). Проверка
     # идёт ДО claim_bonus: неподписанный не должен потратить свой бонус дня.
@@ -115,11 +116,11 @@ async def cmd_bonus(
         block_seconds=config.bonus_block_seconds,
     )
     if status == "blocked":
-        await message.reply(bonus_blocked_text(user, blocked_until, config))
+        await reply_rich(message, bonus_blocked_text(user, blocked_until, config))
         return
     if status == "already":
         streak_note = f" Стрик: 🔥 {streak} {days(streak)}." if streak else ""
-        await message.reply(
+        await reply_rich(message, 
             f"Ты уже забирал бонус сегодня 😉{streak_note}\n"
             f"Баланс: 🍬 <b>{fmt(balance)}</b>. Возвращайся завтра!"
         )
@@ -139,7 +140,7 @@ async def cmd_bonus(
         f"Баланс: <b>{fmt(balance)}</b> {iriski(balance)}. "
         "Не пропусти завтра — стрик сгорает за день пропуска 😉"
     )
-    await message.reply("\n".join(lines))
+    await reply_rich(message, "\n".join(lines))
 
 
 # ---------- казино (слоты) ----------
@@ -154,7 +155,7 @@ async def cmd_casino(
     if user is None or user.is_bot:
         return
     if not config.games_enabled:
-        await message.reply("Игры сейчас выключены.")
+        await reply_rich(message, "Игры сейчас выключены.")
         return
 
     raw = None
@@ -165,14 +166,14 @@ async def cmd_casino(
         m = CASINO_RE.match(message.text or "")
         raw = m.group(1) if m else None
     if raw is None or not raw.isdigit():
-        await message.reply(
+        await reply_rich(message, 
             "🎰 Слоты: напиши <b>«казино 10»</b> или /casino 10 — ставка спишется с баланса.\n"
             "Выплаты: 7️⃣7️⃣7️⃣ — х3, три одинаковых — х2, две семёрки — возврат ставки."
         )
         return
     bet = int(raw)
     if not config.casino_min_bet <= bet <= config.casino_max_bet:
-        await message.reply(
+        await reply_rich(message, 
             f"Ставка от {fmt(config.casino_min_bet)} до {fmt(config.casino_max_bet)} 🍬"
         )
         return
@@ -181,7 +182,7 @@ async def cmd_casino(
     now = time.time()
     elapsed = now - _last_casino.get(key, 0.0)
     if elapsed < config.casino_cooldown:
-        await message.reply(f"Не так быстро 🎰 Подожди {int(config.casino_cooldown - elapsed) + 1} сек.")
+        await reply_rich(message, f"Не так быстро 🎰 Подожди {int(config.casino_cooldown - elapsed) + 1} сек.")
         return
 
     await db.ensure_user(message.chat.id, user.id, user.username, user.first_name)
@@ -189,7 +190,7 @@ async def cmd_casino(
         message.chat.id, user.id, -bet, "казино: ставка", None
     )
     if status != "ok":
-        await message.reply(
+        await reply_rich(message, 
             f"Не хватает ирисок: на балансе 🍬 <b>{fmt(balance)}</b>. "
             f"Общайся в чате или забери ежедневный бонус («бонус»)."
         )
@@ -202,7 +203,7 @@ async def cmd_casino(
         # не получилось крутануть — возвращаем ставку
         await db.adjust_balance(message.chat.id, user.id, bet, "казино: возврат ставки",
                                 None, earned=0)
-        await message.reply("Автомат заело 🎰 Ставка возвращена, попробуй ещё раз.")
+        await reply_rich(message, "Автомат заело 🎰 Ставка возвращена, попробуй ещё раз.")
         return
 
     mult, label = slot_multiplier(dice_msg.dice.value if dice_msg.dice else 0)
@@ -232,7 +233,7 @@ async def cmd_casino(
 async def casino_hint(message: Message, config: Config) -> None:
     if not config.games_enabled:
         return
-    await message.reply(
+    await reply_rich(message, 
         f"🎰 Напиши <b>«казино N»</b>, где N — ставка от {fmt(config.casino_min_bet)} "
         f"до {fmt(config.casino_max_bet)} 🍬\n"
         "Выплаты: 7️⃣7️⃣7️⃣ — х3, три одинаковых — х2, две семёрки — возврат ставки."
@@ -251,20 +252,20 @@ async def cmd_duel(
     if challenger is None or challenger.is_bot:
         return
     if not config.games_enabled:
-        await message.reply("Игры сейчас выключены.")
+        await reply_rich(message, "Игры сейчас выключены.")
         return
     reply = replied_message(message)
     if reply is None or reply.from_user is None:
-        await message.reply(
+        await reply_rich(message, 
             "⚔️ Дуэль объявляется ответом на сообщение соперника: <b>«дуэль 10»</b>"
         )
         return
     target = reply.from_user
     if target.is_bot:
-        await message.reply("С ботами не дерёмся 🤖")
+        await reply_rich(message, "С ботами не дерёмся 🤖")
         return
     if target.id == challenger.id:
-        await message.reply("Сам с собой? Так нельзя 😅")
+        await reply_rich(message, "Сам с собой? Так нельзя 😅")
         return
 
     raw = None
@@ -275,11 +276,11 @@ async def cmd_duel(
         m = DUEL_RE.match(message.text or "")
         raw = m.group(1) if m else None
     if raw is None or not raw.isdigit():
-        await message.reply("Укажи ставку: <b>«дуэль 10»</b> ответом на сообщение соперника.")
+        await reply_rich(message, "Укажи ставку: <b>«дуэль 10»</b> ответом на сообщение соперника.")
         return
     amount = int(raw)
     if not config.duel_min_bet <= amount <= config.duel_max_bet:
-        await message.reply(
+        await reply_rich(message, 
             f"Ставка дуэли от {fmt(config.duel_min_bet)} до {fmt(config.duel_max_bet)} 🍬"
         )
         return
@@ -287,28 +288,28 @@ async def cmd_duel(
     now = time.time()
     await db.expire_old_duels(message.chat.id, now, config.duel_ttl)
     if await db.has_pending_duel(message.chat.id, challenger.id):
-        await message.reply("У тебя уже есть активная дуэль — сначала разберись с ней («отмена дуэли»).")
+        await reply_rich(message, "У тебя уже есть активная дуэль — сначала разберись с ней («отмена дуэли»).")
         return
     if await db.has_pending_duel(message.chat.id, target.id):
-        await message.reply("У соперника уже есть активная дуэль. Подожди.")
+        await reply_rich(message, "У соперника уже есть активная дуэль. Подожди.")
         return
 
     await db.ensure_user(message.chat.id, challenger.id, challenger.username, challenger.first_name)
     await db.ensure_user(message.chat.id, target.id, target.username, target.first_name)
     ch_row = await db.get_user(message.chat.id, challenger.id)
     if ch_row["balance"] < amount:
-        await message.reply(f"У тебя только 🍬 <b>{fmt(ch_row['balance'])}</b> — не хватает на ставку.")
+        await reply_rich(message, f"У тебя только 🍬 <b>{fmt(ch_row['balance'])}</b> — не хватает на ставку.")
         return
     tg_row = await db.get_user(message.chat.id, target.id)
     if tg_row["balance"] < amount:
-        await message.reply(
+        await reply_rich(message, 
             f"У соперника нет 🍬 {fmt(amount)} — выбери ставку поменьше."
         )
         return
 
     await db.create_duel(message.chat.id, challenger.id, target.id, amount, now)
     minutes = max(int(config.duel_ttl // 60), 1)
-    await message.reply(
+    await reply_rich(message, 
         f"⚔️ <b>Дуэль!</b> {display_name(challenger.first_name, challenger.username)} "
         f"ставит 🍬 <b>{fmt(amount)}</b> против "
         f"{mention(target.id, target.first_name, target.username)}.\n"
@@ -337,7 +338,7 @@ async def cmd_accept(message: Message, db: Database, config: Config) -> None:
         duel["id"], message.chat.id, winner_id, loser_id, amount, now
     )
     if status != "ok":
-        await message.reply("У одной из сторон уже нет ставки — дуэль отменена 🕊")
+        await reply_rich(message, "У одной из сторон уже нет ставки — дуэль отменена 🕊")
         return
 
     w_row = await db.get_user(message.chat.id, winner_id)
@@ -345,7 +346,7 @@ async def cmd_accept(message: Message, db: Database, config: Config) -> None:
     w_name = display_name(w_row["first_name"], w_row["username"])
     l_name = display_name(l_row["first_name"], l_row["username"])
     coin = "Орёл" if winner_id == challenger_id else "Решка"
-    await message.reply(
+    await reply_rich(message, 
         f"🪙 Подбрасываю монетку… <b>{coin}!</b>\n"
         f"🏆 Побеждает <b>{w_name}</b> — забирает 🍬 <b>{fmt(amount)}</b> у {l_name}.\n"
         f"Баланс: {w_name} — {fmt(winner_balance)}, {l_name} — {fmt(loser_balance)}"
@@ -364,7 +365,7 @@ async def cmd_decline(message: Message, db: Database, config: Config) -> None:
     if duel is None:
         raise SkipHandler()
     await db.set_duel_status(duel["id"], "declined", now)
-    await message.reply("🕊 Дуэль отклонена — ириски целы.")
+    await reply_rich(message, "🕊 Дуэль отклонена — ириски целы.")
 
 
 @router.message(GroupF, trig(CANCEL_TRIGGERS))
@@ -378,7 +379,7 @@ async def cmd_cancel_duel(message: Message, db: Database, config: Config) -> Non
     if duel is None:
         raise SkipHandler()
     await db.set_duel_status(duel["id"], "cancelled", now)
-    await message.reply("Дуэль отменена.")
+    await reply_rich(message, "Дуэль отменена.")
 
 
 # ---------- правила игр ----------
@@ -399,7 +400,7 @@ async def cmd_games(message: Message, config: Config) -> None:
             f" С {config.bonus_abuse_limit} нарушений бонус закрывается на "
             f"{block_days:g} {days(int(round(block_days)))}."
         )
-    await message.reply(
+    await reply_rich(message, 
         "🎮 <b>Игры и бонусы</b>\n\n"
         f"🎁 <b>Бонус</b> — напиши «бонус»: раз в день +{config.bonus_min}–{max(config.bonus_max, config.bonus_min)} 🍬"
         + (

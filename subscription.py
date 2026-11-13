@@ -13,6 +13,7 @@ import logging
 from dataclasses import replace
 from html import escape
 
+from rich_ui import reply_rich
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import (
@@ -142,13 +143,13 @@ async def ensure_subscribed(message: Message, bot: Bot, config: Config) -> bool:
         return True
     if result == NOT_SUBSCRIBED:
         text, markup = not_subscribed_reply(config.channel_url)
-        await message.reply(
+        await reply_rich(message, 
             text,
             reply_markup=markup,
             link_preview_options=LinkPreviewOptions(is_disabled=True),
         )
     else:
-        await message.reply(CHECK_FAILED_TEXT)
+        await reply_rich(message, CHECK_FAILED_TEXT)
     return False
 
 
