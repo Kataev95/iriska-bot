@@ -74,3 +74,21 @@ button{font:inherit;cursor:pointer} button:disabled{cursor:not-allowed;opacity:.
 .modal-buttons{display:flex;gap:9px}.modal-buttons button{flex:1}
 .error-page{text-align:center;padding-top:10vh}.error-page .icon{font-size:50px}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* PETS WORLD 1.1: soft polish without changing the approved Fullscreen layout */
+.mood-caption{margin:13px 0 0;font-size:12px;color:#c2e2dd;line-height:1.5}
+.stat.is-low strong{color:#ff9ba8}
+.stat.is-low .progress i{background:linear-gradient(90deg,#f07f91,#ffb1a6)}
+.stat.is-medium strong{color:#ffdea0}
+.stat.is-medium .progress i{background:linear-gradient(90deg,#d8b66b,#f5df93)}
+.care-button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:10px 5px}
+.care-button span{white-space:nowrap;font-size:12px}
+.care-button small{font-size:10px;font-weight:700;color:#9bebce;line-height:1.2}
+.care-button:disabled small{color:#a9b5d4}
+#app.is-busy button[data-action],#app.is-busy button[data-buy],#app.is-busy button[data-profession]{
+  pointer-events:none;opacity:.55
+}
+.btn:focus-visible,.nav-btn:focus-visible,.pill:focus-visible,.picker:focus-visible{
+  outline:2px solid var(--cyan);outline-offset:3px
+}
+@media (min-width:450px){.care-button span{font-size:13px}}
