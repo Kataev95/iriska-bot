@@ -198,6 +198,9 @@ class Config:
     # 🎲 События питомца в день (0 — выключить) и сколько часов живёт событие
     pet_events_per_day: int = 2
     pet_event_ttl_hours: float = 2.0
+    # Защищать серии после простоя сервера (пауза от N часов и смена даты).
+    # 0 — выключить. Не влияет на обычные пропущенные дни, когда бот онлайн.
+    pet_outage_grace_hours: float = 6.0
 
     @property
     def pet_restore_seconds(self) -> float:
@@ -282,4 +285,5 @@ def load_config() -> Config:
         pet_feed_notice=_bool_env("PET_FEED_NOTICE", True),
         pet_events_per_day=_int_env("PET_EVENTS_PER_DAY", 2),
         pet_event_ttl_hours=_float_env("PET_EVENT_TTL_HOURS", 2.0),
+        pet_outage_grace_hours=_float_env("PET_OUTAGE_GRACE_HOURS", 6.0),
     )

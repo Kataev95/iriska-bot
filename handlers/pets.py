@@ -553,6 +553,17 @@ async def process_pet_day(
     today = now.strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # Сначала учитываем простой сервера, и ТОЛЬКО потом тратим заморозки
+    # или объявляем побег. Это важно сразу после перезапуска.
+    shielded, outage_hours = await db.shield_pet_streaks_after_outage(
+        now.timestamp(), config.tz, config.pet_outage_grace_hours,
+    )
+    if shielded:
+        logger.warning(
+            "🛡 После простоя %.1f ч сохранено %s серий питомцев",
+            outage_hours, shielded,
+        )
+
     frozen = await db.use_pet_freezes(yesterday)
     by_chat: dict[int, list] = {}
     for pet in frozen:
