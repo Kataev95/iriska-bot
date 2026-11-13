@@ -214,8 +214,45 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn('care_state', js)
         self.assertIn("trips_remaining", js)
         self.assertIn("syncClock(snapshot)", js)
-        self.assertIn("/static/style.css?v=3", html)
-        self.assertIn("/static/app.js?v=3", html)
+        self.assertIn("/static/style.css?v=4", html)
+        self.assertIn("/static/app.js?v=4", html)
+
+
+class MiniAppFeedbackTests(unittest.TestCase):
+    """Visual feedback must be client-only and preserve the fullscreen layout."""
+
+    def test_character_interaction_is_not_a_game_action(self):
+        from pathlib import Path
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        js = (static / "app.js").read_text(encoding="utf-8")
+        css = (static / "style.css").read_text(encoding="utf-8")
+        html = (static / "index.html").read_text(encoding="utf-8")
+        self.assertIn('data-click="pet-greet"', js)
+        self.assertIn('if (target.dataset.click==="pet-greet") {petGreeting();return;}', js)
+        self.assertIn('class="effects-layer"', html)
+        self.assertIn('aria-hidden="true"', html)
+        self.assertIn('function showActionEffect(kind, code, before, after, message)', js)
+        self.assertIn('setPet(result.pet);', js)
+        self.assertIn('showActionEffect(kind, code, before, result.pet, result.message)', js)
+        self.assertIn('if (success) {', js)
+        self.assertIn('before.trip && !after.trip', js)
+        self.assertIn('after.daily.filter(t => t.claimed)', js)
+        self.assertIn('prefers-reduced-motion:reduce', css)
+        self.assertIn('effect-card', css)
+        self.assertIn('task-progress', css)
+        self.assertIn('safeAreaInset', js)
+        self.assertIn('contentSafeAreaInset', js)
+
+    def test_frontend_javascript_has_valid_syntax(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
+        js = Path(__file__).resolve().parent / "miniapp" / "static" / "app.js"
+        cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
+                            text=True, timeout=15, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
 
 
 if __name__ == "__main__":
