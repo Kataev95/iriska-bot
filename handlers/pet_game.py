@@ -4,7 +4,9 @@ import time
 from datetime import datetime
 from html import escape
 
+from rich_ui import answer_rich
 from aiogram import F, Router
+from rich_ui import edit_rich, rich_table
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
@@ -25,6 +27,68 @@ def button(text, action, pid, arg=""):
     return InlineKeyboardButton(
         text=text, callback_data=f"pg:{action}:{pid}" + (f":{arg}" if arg else "")
     )
+
+
+def game_hud_html(pet, action: str, note: str, now: float, trip=None,
+                  day: str = "", completed=None, claimed=None, arg: str = "") -> str:
+    from html import escape as html_escape
+
+    level = level_for(pet["xp"])
+    target = next_level_xp(pet["xp"])
+    doc = [
+        f"<h2>🧭 {pet_title(pet)} · Приключения</h2>",
+        rich_table(
+            ["Уровень", "Опыт", "До следующего"],
+            [[f"{level}/20", f"{pet['xp']} XP", f"{target - pet['xp']} XP" if target else "🏆"]],
+        ),
+    ]
+    if note:
+        doc.append(f"<blockquote>{html_escape(note)}</blockquote>")
+    if action in ("tasks", "daily"):
+        doc.append(f"<h3>📋 Задания · {day}</h3>")
+        rows = []
+        for key, (title, xp) in TASKS.items():
+            state = "🎁 Забрано" if key in claimed else (
+                "✅ Выполнено" if completed[key] else "▫️ Ожидается"
+            )
+            rows.append([title, f"{xp} XP", state])
+        doc.append(rich_table(["Задание", "Награда", "Состояние"], rows))
+        doc.append("<footer>Получите опыт до полуночи.</footer>")
+    elif action in ("professions", "confirm", "choose"):
+        doc.append("<h3>🎓 Профессии</h3>")
+        doc.append(rich_table(
+            ["Профессия", "Навык"],
+            [[title, detail] for title, detail in PROFESSIONS.values()],
+        ))
+        if pet["profession"]:
+            doc.append(f"<p>✅ Выбрана: {PROFESSIONS[pet['profession']][0]}</p>")
+        elif level < 5:
+            doc.append("<p>🔒 Откроется с 5 уровня.</p>")
+        elif action == "confirm" and arg in PROFESSIONS:
+            doc.append(
+                f"<blockquote>Подтвердить выбор: {html_escape(PROFESSIONS[arg][0])}? "
+                "Выбор общий для двоих и пока не меняется.</blockquote>"
+            )
+    elif trip:
+        r = ROUTES[trip["route"]]
+        remain = max(0, int((trip["finish_at"] - now) / 60))
+        doc.append("<h3>⏳ Активный поход</h3>")
+        doc.append(rich_table(
+            ["Маршрут", "Осталось", "Награда"],
+            [[r.title, f"{remain} мин" if remain else "Готово 🎁",
+              f"{trip['xp']} XP + {trip['coins']} 🍬"]],
+        ))
+    else:
+        rows = []
+        for code, r in ROUTES.items():
+            energy = r.energy - (3 if pet["profession"] == "artisan" else 0)
+            xp = r.xp * 120 // 100 if pet["profession"] == "explorer" else r.xp
+            coins = r.coins + (1 if pet["profession"] == "merchant" else 0)
+            rows.append([r.title, f"{r.seconds//60} мин", f"{energy} ⚡", f"{xp} XP", f"{coins} 🍬"])
+        doc.append("<h3>🌍 Выберите маршрут</h3>")
+        doc.append(rich_table(["Маршрут", "Время", "Энергия", "Опыт", "Ириски"], rows))
+        doc.append("<footer>Не более 3 походов в день на человека.</footer>")
+    return "".join(doc)
 
 
 @router.callback_query(F.data.startswith("pg:"))
@@ -57,6 +121,7 @@ async def on_game(callback: CallbackQuery, db: Database, config: Config):
     now = time.time()
     day = datetime.fromtimestamp(now, config.tz).date().isoformat()
     note = ""
+    completed = claimed = None
     if action == "start":
         note = await db.start_trip(pid, uid, arg, now, config.tz)
     elif action == "claim" and arg.isdigit():
@@ -157,11 +222,17 @@ async def on_game(callback: CallbackQuery, db: Database, config: Config):
     )
     markup = InlineKeyboardMarkup(inline_keyboard=rows)
     text = "\n".join(lines)
+    # The same rich message stays on screen. Old-style photo cards open a new HUD.
+    if action not in ("tasks", "daily", "professions", "confirm", "choose"):
+        trip = await db.active_trip(pid)
+    else:
+        trip = None
+    html = game_hud_html(pet, action, note, now, trip, day, completed, claimed, arg)
     try:
         if callback.message.photo:
-            await callback.message.answer(text, reply_markup=markup)
+            await answer_rich(callback.message, text, html=html, reply_markup=markup)
         else:
-            await callback.message.edit_text(text, reply_markup=markup)
+            await edit_rich(callback.message, text, html=html, reply_markup=markup)
     except TelegramBadRequest as exc:
         if "not modified" not in str(exc):
             raise

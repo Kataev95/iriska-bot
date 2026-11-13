@@ -15,12 +15,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import time
 from datetime import datetime
 
+from rich_ui import (
+    asset_url, edit_rich, edit_rich_by_id, panel_html,
+    reply_rich, rich_table, send_rich,
+)
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -133,12 +138,23 @@ async def _remember(db: Database, key: str, msg) -> None:
 async def send_pet_photo(
     bot: Bot, db: Database, chat_id: int, key: str, caption: str,
     reply_to: int | None = None, markup: InlineKeyboardMarkup | None = None,
+    rich_html: str | None = None,
 ) -> Message | None:
     """Фото питомца с подписью; если картинки нет или подпись длинная — текстом."""
     reply = (
         ReplyParameters(message_id=reply_to, allow_sending_without_reply=True)
         if reply_to else None
     )
+    # Test-mode/legacy-mode keeps the existing photo card (no UI migration).
+    if os.environ.get("RICH_MESSAGES_ENABLED", "1") != "0":
+        try:
+            return await send_rich(
+                bot, chat_id, caption, html=rich_html,
+                image_url=asset_url(key), reply_to_message_id=reply_to,
+                reply_markup=markup, fallback=False,
+            )
+        except (TelegramBadRequest, TelegramNotFound) as exc:
+            logger.info("Rich pet image unsupported, use legacy photo: %s", exc)
     media, from_disk = await _media(db, key)
     if media is not None and len(caption) <= 1024:
         for _ in range(2):
@@ -163,7 +179,7 @@ async def send_pet_photo(
                 logger.warning("Фото %s не ушло: %s", key, e)
                 break
     try:
-        return await bot.send_message(
+        return await send_rich(bot, 
             chat_id, caption, reply_markup=markup, reply_parameters=reply
         )
     except Exception as e:
@@ -173,9 +189,15 @@ async def send_pet_photo(
 
 async def _edit_card(
     message: Message, db: Database, key: str, caption: str,
-    markup: InlineKeyboardMarkup | None,
+    markup: InlineKeyboardMarkup | None, rich_html: str | None = None,
 ) -> None:
-    """Обновить карточку: фото + подпись + кнопки (или текст, если карточка текстовая)."""
+    """Update a rich HUD in-place; legacy photo cards retain the old path."""
+    if not message.photo:
+        if await edit_rich(
+            message, caption, html=rich_html, image_url=asset_url(key),
+            reply_markup=markup,
+        ):
+            return
     if message.photo:
         media, from_disk = await _media(db, key)
         if media is not None and len(caption) <= 1024:
@@ -199,6 +221,87 @@ async def _edit_card(
         await message.edit_text(caption, reply_markup=markup)
     except TelegramBadRequest:
         pass
+
+
+def rich_pet_html(pet, names: dict, config: Config, note: str | None = None) -> str:
+    """Rich 3.0 HUD: structured growth, health bars and today's team goal."""
+    from html import escape
+
+    streak, best = int(pet["streak"]), int(pet["best_streak"])
+    today = local_now(config).strftime("%Y-%m-%d")
+    lines = [
+        f"<h2>{pet_title(pet)}</h2>",
+        f"<p>👫 {_plain(names, pet['user_a'])} и {_plain(names, pet['user_b'])}</p>",
+        "<hr/>",
+    ]
+    if best <= 0:
+        lines.append("<h3>🥚 Яйцо</h3>")
+        lines.append("<p>Напишите друг другу сегодня, чтобы питомец вылупился!</p>")
+    else:
+        xp = int(pet["xp"])
+        level = level_for(xp)
+        target = next_level_xp(xp)
+        lines.extend([
+            "<h3>⭐ Развитие</h3>",
+            rich_table(
+                ["Показатель", "Значение"],
+                [
+                    ["Уровень", f"{level}/20"],
+                    ["Опыт", f"{xp} XP"],
+                    ["До уровня", f"{target - xp} XP" if target else "Максимум 🏆"],
+                    ["Серия", f"{streak} дней"],
+                    ["Лучший результат", f"{best} дней"],
+                    ["Стадия", stage_line(growth_days(pet))],
+                ],
+            ),
+            "<h3>❤️ Состояние</h3>",
+            rich_table(
+                ["🍖 Сытость", "😊 Радость", "⚡ Энергия"],
+                [[f"{int(pet['food'])}%", f"{int(pet['joy'])}%",
+                  f"{int(pet['energy'])}%"]],
+            ),
+            f"<p>{escape(mood_text(pet['food'], pet['joy'], pet['energy'], local_now(config).hour))}</p>",
+            "<h3>🤝 Совместное задание</h3>",
+        ])
+        if pet["last_fed_day"] == today:
+            lines.append("<p>✅ На сегодня общение засчитано!</p>")
+        else:
+            waiting = [
+                _plain(names, uid)
+                for uid, side in ((pet["user_a"], "a_day"), (pet["user_b"], "b_day"))
+                if pet[side] != today
+            ]
+            lines.append("<p>⏳ Ожидаем: " + ", ".join(waiting) + "</p>")
+        extras = []
+        if int(pet["freezes"]):
+            extras.append(f"🧊 Заморозки: {int(pet['freezes'])}")
+        if int(pet["house"]):
+            extras.append("🏠 Домик")
+        if extras:
+            lines.append("<footer>" + " · ".join(extras) + "</footer>")
+    if note:
+        lines.append(f"<blockquote>{escape(note)}</blockquote>")
+    lines.append("<footer>Питомцы 3.0 · Всё управление через кнопки ниже</footer>")
+    return "".join(lines)
+
+
+def rich_pet_shop_html(pet, balance: int, note: str | None = None) -> str:
+    owned = set(parse_set(pet["items"]))
+    rows = []
+    for item in SHOP:
+        tag = "✅ Куплено" if (item.kind == "wear" and item.code in owned) or (
+            item.kind == "house" and pet["house"]
+        ) else item.note
+        rows.append([f"{item.emoji} {item.title}", f"{item.price} 🍬", tag])
+    doc = (
+        f"<h2>🛒 Магазин · {pet_title(pet)}</h2>"
+        f"<p>🍬 Баланс: <b>{fmt(balance)}</b></p>"
+        + rich_table(["Предмет", "Цена", "Эффект"], rows)
+    )
+    if note:
+        from html import escape
+        doc += f"<blockquote>{escape(note)}</blockquote>"
+    return doc + "<footer>Товар общий для пары, оплачивает нажавший.</footer>"
 
 
 # ---------- карточка ----------
@@ -381,7 +484,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         if pet is None and pets:
             pet = pets[0]
     if pet is None:
-        await message.reply(rules_text(config))
+        await reply_rich(message, rules_text(config))
         return
     pet = await refresh_care(db, pet, config, local_now(config).timestamp())
     names = await _names(db, pet)
@@ -390,6 +493,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         card_caption(pet, names, config, user.id),
         reply_to=message.message_id,
         markup=main_keyboard(pet, config, len(pets) > 1),
+        rich_html=rich_pet_html(pet, names, config),
     )
 
 
@@ -434,17 +538,20 @@ async def on_menu(callback: CallbackQuery, db: Database, config: Config) -> None
             message, db, card_key(pet_row, config, force),
             card_caption(pet_row, names, config, user.id, note),
             main_keyboard(pet_row, config, many),
+            rich_pet_html(pet_row, names, config, note),
         )
 
     async def show_shop(pet_row, note: str | None = None):
         urow = await db.get_user(pet_row["chat_id"], user.id)
         balance = int(urow["balance"]) if urow else 0
         await _edit_card(message, db, card_key(pet_row, config),
-                         shop_caption(pet_row, balance, note), shop_keyboard(pet_row))
+                         shop_caption(pet_row, balance, note), shop_keyboard(pet_row),
+                         rich_pet_shop_html(pet_row, balance, note))
 
     async def show_wardrobe(pet_row, note: str | None = None):
         await _edit_card(message, db, card_key(pet_row, config),
-                         wardrobe_caption(pet_row, note), wardrobe_keyboard(pet_row))
+                         wardrobe_caption(pet_row, note), wardrobe_keyboard(pet_row),
+                         panel_html(wardrobe_caption(pet_row, note)))
 
     pet = await refresh_care(db, pet, config, local_now(config).timestamp())
     alive = int(pet["best_streak"]) > 0
@@ -546,6 +653,8 @@ async def spawn_event(bot: Bot, db: Database, config: Config, pet, now_ts: float
     )
     if msg is not None:
         await db.set_pet_event_message(event_id, msg.message_id)
+    else:
+        await db.fail_pet_event_delivery(event_id, now_ts + 3600)
     return msg is not None
 
 
@@ -553,11 +662,16 @@ async def _finish_event_message(bot: Bot, ev, caption: str) -> None:
     if not ev["message_id"]:
         return
     try:
-        await bot.edit_message_caption(
-            chat_id=ev["chat_id"], message_id=ev["message_id"],
-            caption=caption[:1024], reply_markup=None,
-        )
+        await edit_rich_by_id(bot, ev["chat_id"], ev["message_id"], caption)
     except TelegramBadRequest:
+        try:
+            await bot.edit_message_caption(
+                chat_id=ev["chat_id"], message_id=ev["message_id"],
+                caption=caption[:1024], reply_markup=None,
+            )
+        except TelegramBadRequest:
+            pass
+        # Old text cards can be edited as ordinary text.
         try:
             await bot.edit_message_text(
                 caption, chat_id=ev["chat_id"], message_id=ev["message_id"],
@@ -565,8 +679,8 @@ async def _finish_event_message(bot: Bot, ev, caption: str) -> None:
             )
         except TelegramBadRequest:
             pass
-    except Exception as e:
-        logger.warning("Не смог закрыть событие питомца: %s", e)
+    except Exception as exc:
+        logger.warning("Could not finalize rich pet event: %s", exc)
 
 
 EXPIRED_TEXT = {
@@ -583,10 +697,7 @@ async def expire_event(bot: Bot, db: Database, config: Config, ev) -> None:
     kind = EVENTS.get(ev["kind"])
     if pet is None or kind is None:
         return
-    if ev["kind"] == "cold":
-        pet = await add_care(db, pet, config, joy=-30, energy=-20)
-    elif ev["kind"] == "snack":
-        pet = await add_care(db, pet, config, food=20)
+    # Effects were applied atomically when the event expired in the database.
     names = await _names(db, pet)
     await _finish_event_message(
         bot, ev, event_caption(pet, names, kind) + "\n\n" + EXPIRED_TEXT[ev["kind"]]
@@ -602,7 +713,7 @@ async def process_pet_events(
         return 0
     now = now or datetime.now(config.tz)
     now_ts = now.timestamp()
-    for ev in await db.expire_pet_events(now_ts):
+    for ev in await db.expire_pet_events(now_ts, config.tz):
         try:
             await expire_event(bot, db, config, ev)
         except Exception:
@@ -670,69 +781,39 @@ async def on_event(callback: CallbackQuery, db: Database, config: Config) -> Non
     chat_id = int(pet["chat_id"])
     now = time.time()
 
-    paid = False
-    if kind.code == "cold":
-        status, balance = await db.adjust_balance(
-            chat_id, user.id, -CURE_PRICE, "питомец: лекарство", None
+    status, ev, pet, result = await db.resolve_pet_event(
+        event_id, user.id, choice, now, config.tz,
+    )
+    if status == "forbidden":
+        await callback.answer("Это чужой питомец", show_alert=True)
+        return
+    if status == "insufficient":
+        row = await db.get_user(chat_id, user.id)
+        balance = int(row["balance"]) if row else 0
+        await callback.answer(
+            f"Лекарство стоит {CURE_PRICE} 🍬, у тебя {fmt(balance)}",
+            show_alert=True,
         )
-        if status != "ok":
-            await callback.answer(f"Лекарство стоит {CURE_PRICE} 🍬, у тебя {fmt(balance)}",
-                                  show_alert=True)
-            return
-        paid = True
-
-    status, ev = await db.press_pet_event(event_id, user.id, now, kind.together)
-    if status in ("gone", "again"):
-        if paid:
-            await db.adjust_balance(chat_id, user.id, CURE_PRICE,
-                                    "питомец: возврат за лекарство", None, earned=0)
+        return
+    if status in ("gone", "again", "invalid"):
         await callback.answer("Уже нажато 🙂" if status == "again" else "Событие закончилось")
         return
-
     names = await _names(db, pet)
     who = _who(names, user.id)
     if status == "wait":
         await callback.answer("Ждём второго! 🦋")
         if isinstance(callback.message, Message):
             try:
-                await callback.message.edit_caption(
-                    caption=event_caption(pet, names, kind) + f"\n\n✅ {who} уже ловит!",
+                await edit_rich(
+                    callback.message,
+                    event_caption(pet, names, kind) + f"\n\n✅ {who} уже ловит!",
                     reply_markup=event_keyboard(event_id, kind),
                 )
             except TelegramBadRequest:
                 pass
         return
-
-    if kind.code == "coin":
-        await db.adjust_balance(chat_id, user.id, 1, "питомец: монетка", None)
-        result = f"🪙 {who} забрал монетку: +1 🍬"
-    elif kind.code == "butterfly":
-        for uid in (pet["user_a"], pet["user_b"]):
-            await db.adjust_balance(chat_id, uid, 1, "питомец: бабочка", None)
-        pet = await add_care(db, pet, config, joy=30)
-        result = "🦋 Поймали вдвоём! Питомец в восторге (+30 настроения), каждому +1 🍬"
-    elif kind.code == "parcel":
-        owned = parse_set(pet["items"])
-        free = [i for i in WEARABLES if i.code not in owned]
-        if free:
-            item = secrets.choice(free)
-            pet = await db.update_pet(int(pet["id"]), items=join_set(owned + [item.code]))
-            result = (f"🎁 {who} открыл посылку, а там {item.emoji} {item.title}! "
-                      "Надеть — в гардеробе.")
-        else:
-            await db.adjust_balance(chat_id, user.id, 3, "питомец: посылка", None)
-            result = f"🎁 {who} открыл посылку, а там 3 🍬!"
-    elif kind.code == "cold":
-        pet = await add_care(db, pet, config, joy=20, energy=10)
-        result = f"💊 {who} вылечил питомца (−{CURE_PRICE} 🍬). Он снова бодр!"
-    else:  # snack
-        if choice == "allow":
-            pet = await add_care(db, pet, config, food=30, joy=10)
-            result = f"😋 {who} разрешил — питомец счастлив и сыт!"
-        else:
-            pet = await add_care(db, pet, config, joy=-10)
-            result = f"🙅 {who} отобрал пончик. Питомец обиделся, зато фигура цела 😅"
     await callback.answer("Готово!")
-    await _finish_event_message(callback.bot, ev,
-                                event_caption(pet, names, kind) + "\n\n" + result)
+    await _finish_event_message(
+        callback.bot, ev, event_caption(pet, names, kind) + "\n\n✅ " + who + ": " + result,
+    )
 

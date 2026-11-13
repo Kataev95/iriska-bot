@@ -11,6 +11,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
+from rich_ui import edit_rich, reply_rich, rich_table, send_rich
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
@@ -168,7 +169,7 @@ async def cmd_pet(message: Message, db: Database, config: Config) -> None:
         await cmd_my_pets(message, db, config)
         return
     if target.id == user.id:
-        await message.reply("Питомца растят вдвоём — ответь «питомец» другу 😉")
+        await reply_rich(message, "Питомца растят вдвоём — ответь «питомец» другу 😉")
         return
 
     now = time.time()
@@ -181,21 +182,21 @@ async def cmd_pet(message: Message, db: Database, config: Config) -> None:
     )
     if status == "exists":
         if pet["status"] == "pending":
-            await message.reply("Приглашение уже отправлено — ждём ответа 🥚")
+            await reply_rich(message, "Приглашение уже отправлено — ждём ответа 🥚")
         else:
             names = await db.user_names(message.chat.id, [pet["user_a"], pet["user_b"]])
-            await message.reply(pet_card(pet, user.id, names, config, today_day(config)))
+            await reply_rich(message, pet_card(pet, user.id, names, config, today_day(config)))
         return
     if status == "limit_inviter":
-        await message.reply(
+        await reply_rich(message, 
             f"У тебя уже {config.pet_max_per_user} питомцев — больше не прокормить 🙈"
         )
         return
     if status == "limit_target":
-        await message.reply("У него уже максимум питомцев 🙈")
+        await reply_rich(message, "У него уже максимум питомцев 🙈")
         return
     minutes = max(int(config.pet_invite_ttl // 60), 1)
-    await message.reply(
+    await reply_rich(message, 
         f"🥚 {mention(user.id, user.first_name, user.username)} предлагает "
         f"{mention(target.id, target.first_name, target.username)} завести "
         "<b>общего питомца</b>!\n\n"
@@ -221,7 +222,7 @@ async def on_pet_callback(callback: CallbackQuery, db: Database, config: Config)
         if message is None:
             return
         try:
-            await message.edit_text(text, reply_markup=None)
+            await edit_rich(message, text, reply_markup=None)
         except TelegramBadRequest:
             pass
 
@@ -292,7 +293,7 @@ async def cmd_pet_top(message: Message, db: Database, config: Config) -> None:
         return
     top = await db.top_pets(message.chat.id, 10)
     if not top:
-        await message.reply("Питомцев пока нет. Ответь другу «питомец» — будьте первыми 🐣")
+        await reply_rich(message, "Питомцев пока нет. Ответь другу «питомец» — будьте первыми 🐣")
         return
     ids = sorted({p["user_a"] for p in top} | {p["user_b"] for p in top})
     names = await db.user_names(message.chat.id, ids)
@@ -304,13 +305,27 @@ async def cmd_pet_top(message: Message, db: Database, config: Config) -> None:
             f"{place(i)} {pet_title(p)} — {_plain(names, p['user_a'])} и "
             f"{_plain(names, p['user_b'])} • {tail}"
         )
-    await message.reply("\n".join(lines))
+    html = (
+        "<h2>🏆 Топ питомцев чата</h2>"
+        + rich_table(
+            ["№", "Питомец", "Хозяева", "Уровень", "🔥 Дни"],
+            [
+                [
+                    str(i), pet_title(p), _plain(names, p["user_a"]) + " и " + _plain(names, p["user_b"]),
+                    str(level_for(p["xp"])), str(p["streak"]),
+                ]
+                for i, p in enumerate(top, 1)
+            ],
+        )
+        + "<footer>Рейтинг по лучшей серии. Прогресс и опыт сохраняются.</footer>"
+    )
+    await reply_rich(message, "\n".join(lines), html=html)
 
 
 @router.message(GroupF, trig(HELP_TRIGGERS))
 async def cmd_pet_help(message: Message, config: Config) -> None:
     if config.pets_enabled:
-        await message.reply(rules_text(config))
+        await reply_rich(message, rules_text(config))
 
 
 # ---------- имя, возвращение, отпустить ----------
@@ -321,21 +336,21 @@ async def cmd_rename(message: Message, db: Database, config: Config) -> None:
         return
     pet, error = await _resolve_pet(message, db)
     if pet is None:
-        await message.reply(error)
+        await reply_rich(message, error)
         return
     m = RENAME_RE.match(message.text or "")
     name = clean_name(m.group(1) if m else "")
     if not name:
-        await message.reply("Напиши имя: «назвать питомца Барсик»")
+        await reply_rich(message, "Напиши имя: «назвать питомца Барсик»")
         return
     await db.rename_pet(int(pet["id"]), name)
     pet = await db.get_pet(int(pet["id"]))
     if int(pet["best_streak"]) <= 0:
-        await message.reply(
+        await reply_rich(message, 
             f"🥚 Имя <b>{pet_name(pet)}</b> записано — так назовут того, кто вылупится!"
         )
     else:
-        await message.reply(f"✨ Теперь питомца зовут {pet_title(pet)}")
+        await reply_rich(message, f"✨ Теперь питомца зовут {pet_title(pet)}")
 
 
 @router.message(GroupF, trig(RESTORE_TRIGGERS))
@@ -345,9 +360,9 @@ async def cmd_restore(message: Message, db: Database, config: Config) -> None:
         return
     pet, error = await _resolve_pet(message, db)
     if pet is None:
-        await message.reply(error)
+        await reply_rich(message, error)
         return
-    await message.reply("🏡 В Питомцах 3.0 питомец остаётся дома: уровень, облик и вещи сохраняются. Открой «мой питомец».")
+    await reply_rich(message, "🏡 В Питомцах 3.0 питомец остаётся дома: уровень, облик и вещи сохраняются. Открой «мой питомец».")
 
 
 @router.message(GroupF, trig(ABANDON_TRIGGERS))
@@ -356,10 +371,10 @@ async def cmd_abandon(message: Message, db: Database, config: Config) -> None:
         return
     pet, error = await _resolve_pet(message, db)
     if pet is None:
-        await message.reply(error)
+        await reply_rich(message, error)
         return
     streak = int(pet["streak"])
-    await message.reply(
+    await reply_rich(message, 
         f"Точно отпустить {pet_title(pet)}? Серия 🔥 {streak} {days(streak)} "
         "пропадёт навсегда.",
         reply_markup=abandon_keyboard(int(pet["id"])),
@@ -427,7 +442,7 @@ async def track_pet_message(message: Message, db: Database, config: Config) -> N
                 await send_pet_photo(message.bot, db, message.chat.id, key, text,
                                      reply_to=message.message_id)
             else:
-                await message.reply(text)
+                await reply_rich(message, text)
         except Exception as e:  # не мешаем подсчёту из-за сбоя отправки
             logger.warning("Не смог сообщить о питомце: %s", e)
 
@@ -558,7 +573,7 @@ async def process_pet_day(
 
 async def _send(bot: Bot, chat_id: int, text: str) -> None:
     try:
-        await bot.send_message(chat_id, text)
+        await send_rich(bot, chat_id, text)
     except Exception as e:  # выгнали из чата и т.п. — не падаем
         logger.warning("Сообщение о питомцах в чат %s не ушло: %s", chat_id, e)
 

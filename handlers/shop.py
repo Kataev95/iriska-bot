@@ -14,6 +14,7 @@ import logging
 import time
 from html import escape
 
+from rich_ui import edit_rich, reply_rich, rich_table, send_rich
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
@@ -112,6 +113,20 @@ def shortage_text(item: ShopItem, balance: int) -> str:
     )
 
 
+def shop_html(items: tuple[ShopItem, ...], balance: int, contact: str) -> str:
+    """Structured native Rich Message catalog."""
+    return (
+        "<h2>🛍 Магазин ирисок</h2>"
+        f"<p>🍬 Твой баланс: <b>{balance}</b></p>"
+        + rich_table(
+            ["Товар", "Цена"],
+            [[item.label(), f"{item.price} 🍬"] for item in items],
+        )
+        + "<p>Выбери товар кнопкой, чтобы посмотреть детали.</p>"
+        + f"<footer>Помощь с заказом: {escape(contact)}</footer>"
+    )
+
+
 # ---------- клавиатуры ----------
 
 def catalog_keyboard(items: tuple[ShopItem, ...]) -> InlineKeyboardMarkup:
@@ -172,7 +187,7 @@ async def notify_admins(
     ])
     for admin_id in config.admin_ids:
         try:
-            await bot.send_message(admin_id, text)
+            await send_rich(bot, admin_id, text)
         except Exception as exc:  # админ не начинал диалог с ботом и т.п.
             logger.warning(
                 "Не смог сообщить админу %s о заказе №%s: %s",
@@ -184,19 +199,10 @@ async def notify_admins(
 
 async def _safe_edit(
     message: Message, text: str, markup: InlineKeyboardMarkup,
+    html: str | None = None,
 ) -> bool:
-    """Правит сообщение магазина, прощая повторные нажатия без изменений.
-
-    False — сообщение обновить не удалось (например, оно слишком старое).
-    """
-    try:
-        await message.edit_text(text, reply_markup=markup)
-        return True
-    except TelegramBadRequest as exc:
-        if "not modified" in str(exc):
-            return True
-        logger.warning("Не смог обновить сообщение магазина: %s", exc)
-        return False
+    """Edit native Rich HUD in place, with a graceful legacy fallback."""
+    return await edit_rich(message, text, html=html, reply_markup=markup)
 
 
 @router.message(GroupF, Command("shop"))
@@ -206,13 +212,14 @@ async def cmd_shop(message: Message, db: Database, config: Config) -> None:
     if user is None or user.is_bot:
         return
     if not config.shop_enabled:
-        await message.reply("🛍 Магазин сейчас закрыт — заходи позже.")
+        await reply_rich(message, "🛍 Магазин сейчас закрыт — заходи позже.")
         return
     row = await db.get_user(message.chat.id, user.id)
     balance = int(row["balance"]) if row else 0
     items = catalog(config.shop_prices)
-    await message.reply(
+    await reply_rich(message, 
         shop_text(items, balance, config.shop_contact),
+        html=shop_html(items, balance, config.shop_contact),
         reply_markup=catalog_keyboard(items),
     )
 
@@ -225,21 +232,21 @@ async def cmd_buy(
     if user is None or user.is_bot:
         return
     if not config.shop_enabled:
-        await message.reply("🛍 Магазин сейчас закрыт — заходи позже.")
+        await reply_rich(message, "🛍 Магазин сейчас закрыт — заходи позже.")
         return
     items = catalog(config.shop_prices)
     raw = (command.args or "").strip().split()
     item = find_item(items, raw[0]) if raw else None
     if item is None:
         hint = ", ".join(f"/buy {i.code}" for i in items[:3])
-        await message.reply(
+        await reply_rich(message, 
             "Не знаю такого товара 🤔\n"
             f"Смотри каталог: /shop — например {hint}…"
         )
         return
     row = await db.get_user(message.chat.id, user.id)
     balance = int(row["balance"]) if row else 0
-    await message.reply(
+    await reply_rich(message, 
         confirm_text(item, balance, config.shop_contact),
         reply_markup=confirm_keyboard(item, balance),
     )
@@ -270,7 +277,7 @@ async def on_shop_callback(
     if action == "menu":
         await _safe_edit(
             message, shop_text(items, balance, config.shop_contact),
-            catalog_keyboard(items),
+            catalog_keyboard(items), shop_html(items, balance, config.shop_contact),
         )
         await callback.answer()
         return
@@ -324,7 +331,7 @@ async def on_shop_callback(
         # Сообщение не отредактировалось — покупатель всё равно должен
         # получить чек с номером заказа.
         try:
-            await message.reply(receipt, reply_markup=back_keyboard())
+            await reply_rich(message, receipt, reply_markup=back_keyboard())
         except Exception:
             logger.exception("Не смог отправить чек по заказу №%s", order_id)
     await callback.answer(f"Куплено! Заказ №{order_id}")
