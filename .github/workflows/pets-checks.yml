@@ -28,6 +28,7 @@ jobs:
           python test_pet_outage.py
           python test_pet_game.py
           python test_pet_inventory.py
+          python test_pet_house.py
           python test_pet_event_atomic.py
       - name: Rich UI and Mini App API tests
         run: |
