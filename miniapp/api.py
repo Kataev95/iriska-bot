@@ -105,6 +105,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
     materials, crafts = await db.inventory_state(pet_id)
     rooms, room_used = await db.home_state(pet_id, day)
     businesses = await db.business_state(pet_id, day)
+    equipped_title = await db.season_equipped_title(pet_id)
     workshop_level = rooms["workshop"] if pet["house"] else 0
     job = PROFESSIONS.get(pet["profession"])
     hour = datetime.fromtimestamp(now, cfg.tz).hour
@@ -146,6 +147,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
     )
     return {
         "id": pet_id, "name": pet["name"] or species_by_code(pet["species"]).title,
+        "season_title": equipped_title,
         "species": pet["species"], "stage_days": growth_days(pet),
         "image": f"/assets/pets/{current_image}.jpg",
         "partner": partner_name,
@@ -286,6 +288,18 @@ async def get_league(request: web.Request):
     return web.json_response(result)
 
 
+async def get_season(request: web.Request):
+    user_id = current_user(request)["user_id"]
+    pet_id = int(request.match_info["pet_id"])
+    cfg = request.app["config"]
+    result = await request.app["db"].season_state(
+        pet_id, user_id, time.time(), cfg.tz
+    )
+    if result is None:
+        raise web.HTTPForbidden(text="Сезон доступен только владельцам питомца")
+    return web.json_response(result)
+
+
 async def get_market(request: web.Request):
     uid = current_user(request)["user_id"]
     pet_id = int(request.match_info["pet_id"])
@@ -346,6 +360,14 @@ async def action(request: web.Request):
         )
     elif kind == "business_sell" and code in BUSINESSES:
         result = await db.sell_business_goods(pet_id, uid, code, now, cfg.tz)
+    elif kind == "season_claim":
+        result = await db.claim_season_challenge(
+            pet_id, uid, code, now, cfg.tz
+        )
+    elif kind == "season_equip":
+        result = await db.equip_season_title(
+            pet_id, uid, code, str(payload.get("season_start", ""))
+        )
     elif kind == "market_create":
         result = await db.create_market_listing(
             pet_id, uid, str(payload["item_kind"]), code,
@@ -398,6 +420,7 @@ def create_app(db, config) -> web.Application:
     app.router.add_get(r"/api/pet/{pet_id:\d+}", get_pet)
     app.router.add_get(r"/api/market/{pet_id:\d+}", get_market)
     app.router.add_get(r"/api/league/{pet_id:\d+}", get_league)
+    app.router.add_get(r"/api/season/{pet_id:\d+}", get_season)
     app.router.add_post("/api/action", action)
     app.router.add_get("/assets/pets/{filename}", pet_image)
     app.router.add_static("/static/", ROOT / "static")

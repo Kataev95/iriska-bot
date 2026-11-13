@@ -10,7 +10,7 @@
   function normalize(data) {
     const v=data?.league || data || {};
     return {
-      week: v.week || {},
+      week: v.week || {start: v.week_start, end: v.week_end},
       achievements: asList(v.achievements || v.badges || v.milestones),
       board: asList(v.leaderboard || v.ranking || v.top || v.standings || v.leaders),
       mine: v.mine || v.my_rank || v.your_rank || null,
@@ -82,6 +82,10 @@
         ' · '+num(state.mine.score??state.mine.points??0)+' баллов')
       : (typeof state.mine==='number'?'Место: '+num(state.mine):'');
     return header+summary+
+      '<div class="panel season-link"><div class="row"><div>'+
+      '<div class="h2">🎟 Сезонные испытания</div>'+
+      '<p class="subtitle">Призы-титулы за приключения, задания и бизнесы</p></div>'+
+      '<button class="btn btn-primary" data-click="season">Открыть →</button></div></div>'+
       '<div class="panel league-collection"><div class="row"><div>'+
         '<div class="eyebrow">КОЛЛЕКЦИЯ</div>'+
         '<h2 class="h2">🎖 Достижения '+esc(p.name)+'</h2></div>'+

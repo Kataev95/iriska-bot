@@ -27,7 +27,9 @@ syncSafeArea();
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
              group: "food", busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
-             returnTab: "home", league: null, leagueLoading:false, leagueFetchedAt:0, leagueRequest:0,
+             returnTab: "home", seasonFrom:"home", season:null, seasonLoading:false,
+             seasonFetchedAt:0, seasonRequest:0,
+             league: null, leagueLoading:false, leagueFetchedAt:0, leagueRequest:0,
              market: null, marketLoading:false, marketFetchedAt:0,
              marketRequest:0, marketSelection:{kind:"material",code:"leaf",quantity:1,price:2} };
 const tabs = [
@@ -186,6 +188,12 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect("🍬 +"+(after.balance-before.balance)+" ирисок!", "reward");
     return;
   }
+  if (kind==="season_claim" && message.startsWith("✅")) {
+    playEffect("🎖 Новый титул в коллекции!", "reward");return;
+  }
+  if (kind==="season_equip" && message.startsWith("✅")) {
+    playEffect("👑 Титул обновлён!", "care");return;
+  }
   if (kind.startsWith("market_") && message.startsWith("✅")) {
     playEffect(kind==="market_create"?"📣 Объявление размещено":kind==="market_buy"?
        "🛍 Сделка совершена!":"↩️ Товары возвращены",kind==="market_buy"?"reward":"care");
@@ -229,7 +237,8 @@ function hero(p) {
       '<span class="pet-hint" aria-hidden="true">✨ Поприветствовать</span></button></div>'+
     '<div class="panel"><div class="eyebrow">МОЙ ПИТОМЕЦ</div>'+
     '<div class="row"><div><div class="hero-title">'+safe(p.name)+'</div>'+
-    '<div class="subtitle">🤝 Вместе с '+safe(p.partner)+'</div></div>'+
+    '<div class="subtitle">🤝 Вместе с '+safe(p.partner)+'</div>'+
+    (p.season_title?'<div class="chip chip-purple season-name-tag">'+safe(p.season_title)+'</div>':'')+'</div>'+
     '<div class="chip chip-purple">🔥 '+p.streak+' дн.</div></div>'+
     '<div class="stat-grid">'+stat("🍖","Сытость",p.food)+stat("😊","Настроение",p.joy)+stat("⚡","Энергия",p.energy)+'</div>'+
     '<div class="xp-line"><b>⭐ '+p.xp+' XP</b><div class="progress" role="progressbar" aria-label="Опыт текущего уровня" aria-valuenow="'+progress+'" aria-valuemin="0" aria-valuemax="100"><i style="width:'+progress+'%"></i></div>'+
@@ -266,6 +275,9 @@ function home(p) {
     '<p class="subtitle">'+(p.businesses?.starts_remaining ?? 4)+' производства осталось сегодня · '+
     '🍬 '+(p.businesses?.sales_coins_remaining ?? 12)+' к продаже</p></div>'+
     '<button class="btn btn-primary" data-click="business">Открыть →</button></div></div>'+
+    '<div class="panel season-link"><div class="row"><div><div class="h2">🎟 Сезонные испытания</div>'+
+    '<p class="subtitle">Проходите испытания вдвоём и собирайте коллекцию титулов</p></div>'+
+    '<button class="btn btn-primary" data-click="season">Играть →</button></div></div>'+
     '<div class="panel league-link"><div class="row"><div><div class="h2">🏆 Лига питомцев</div>'+
     '<p class="subtitle">Достижения и еженедельный рейтинг вашего чата</p></div>'+
     '<button class="btn btn-primary" data-click="league">Открыть →</button></div></div>'+
@@ -461,7 +473,8 @@ function render() {
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow()),
     market: p => window.PetsMarket.renderMarket(
       ui.market,p,ui.config,ui.marketSelection,serverNow()),
-    league: p => window.PetsLeague.renderLeague(ui.league,p,serverNow())
+    league: p => window.PetsLeague.renderLeague(ui.league,p,serverNow()),
+    season: p => window.PetsSeason.renderSeason(ui.season,p,serverNow())
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
@@ -484,6 +497,7 @@ async function loadPet(id) {
     ui.picker = false;
     ui.market=null; ui.marketFetchedAt=0; ++ui.marketRequest;
     ui.league=null; ui.leagueFetchedAt=0; ++ui.leagueRequest;
+    ui.season=null; ui.seasonFetchedAt=0; ++ui.seasonRequest;
     setPet(pet);
   } finally {ui.syncing = false;}
 }
@@ -531,6 +545,21 @@ async function loadLeague({force=false,quiet=true}={}) {
     if(!quiet) showToast(e.message);
   } finally {ui.leagueLoading=false;}
 }
+async function loadSeason({force=false,quiet=true}={}) {
+  if(!ui.selected || !TG?.initData || document.hidden || (ui.seasonLoading&&!force)) return;
+  if(!force && ui.season && Date.now()-ui.seasonFetchedAt<60000) return;
+  const id=ui.selected,serial=++ui.seasonRequest;
+  ui.seasonLoading=true;
+  try {
+    const data=await api('/api/season/'+id);
+    if(serial===ui.seasonRequest && ui.selected===id) {
+      ui.season=data;ui.seasonFetchedAt=Date.now();
+      if(ui.tab==='season') render();
+    }
+  } catch(e) {
+    if(!quiet) showToast(e.message);
+  } finally {ui.seasonLoading=false;}
+}
 function syncBackButton() {
   try {
     if (ui.tab !== "home" || !modal.classList.contains("hidden")) TG?.BackButton?.show();
@@ -538,7 +567,8 @@ function syncBackButton() {
   } catch {}
 }
 function goToTab(tab) {
-  if (["wardrobe","inventory","house","business","market","league"].includes(tab) && !["wardrobe","inventory","house","business","market","league"].includes(ui.tab)) {
+  if(tab==="season" && ui.tab!=="season") ui.seasonFrom=ui.tab;
+  if (["wardrobe","inventory","house","business","market","league","season"].includes(tab) && !["wardrobe","inventory","house","business","market","league","season"].includes(ui.tab)) {
     ui.returnTab = ui.tab;
   }
   ui.tab = tab;
@@ -547,6 +577,7 @@ function goToTab(tab) {
   window.scrollTo(0,0);
   if(tab==="market") loadMarket();
   if(tab==="league") loadLeague();
+  if(tab==="season") loadSeason({quiet:false});
 }
 function closeModal() {
   modal.classList.add("hidden");
@@ -554,7 +585,8 @@ function closeModal() {
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
-  else if (["wardrobe","inventory","house","business","market","league"].includes(ui.tab)) goToTab(ui.returnTab || "home");
+  else if (ui.tab==="season") goToTab(ui.seasonFrom||"home");
+  else if (["wardrobe","inventory","house","business","market","league","season"].includes(ui.tab)) goToTab(ui.returnTab || "home");
   else if (ui.tab !== "home") goToTab("home");
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
@@ -562,6 +594,14 @@ document.addEventListener("keydown", e => {if(e.key === "Escape") goBack();});
 function syncTimers() {
   if (!ui.pet || ui.busy) return;
   if(ui.tab==='league') loadLeague();
+  if(ui.tab==='season') {
+    const label=app.querySelector("[data-season-time]");
+    if(label && ui.season?.season?.end_ts) {
+      label.textContent=window.PetsSeason.remaining(
+        Number(ui.season.season.end_ts)-serverNow());
+    }
+    loadSeason();
+  }
   if(ui.tab==="market") {
     for(const badge of app.querySelectorAll("[data-market-expiry]")) {
       badge.textContent="⏳ "+window.PetsMarket.duration(Number(badge.dataset.marketExpires)-serverNow());
@@ -627,12 +667,17 @@ async function perform(kind, code="", extra={}) {
     const before = ui.pet;
     const result = await api('/api/action', {pet_id:id,kind,code,...extra});
     if (ui.selected === id) {
+      ++ui.leagueRequest; ui.league=null; ui.leagueFetchedAt=0;
+      if(kind.startsWith("season_")) {
+        ++ui.seasonRequest; ui.season=null; ui.seasonFetchedAt=0;
+      }
       setPet(result.pet);
       showActionEffect(kind, code, before, result.pet, result.message);
       if(kind.startsWith("market_")) {
         ui.market=null;ui.marketFetchedAt=0;
         await loadMarket({force:true,quiet:false});
       }
+      if(kind.startsWith("season_")) await loadSeason({force:true,quiet:false});
     }
     showToast(result.message);
     if (result.message.startsWith("✅") || result.message.startsWith("💕")) haptic("success");
@@ -658,6 +703,32 @@ document.addEventListener("click", async e=>{
   if (target.dataset.click==="business-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.click==="market") {tap();goToTab("market");return;}
   if (target.dataset.click==="market-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.click==="season") {tap();goToTab("season");return;}
+  if (target.dataset.click==="season-back") {
+    tap();goToTab(ui.seasonFrom||"home");return;
+  }
+  if (target.dataset.seasonRefresh) {await loadSeason({force:true,quiet:false});return;}
+  if (target.dataset.seasonClaim) {
+    const item=ui.season?.challenges?.find(c=>c.code===target.dataset.seasonClaim);
+    if(item?.ready&&!item.claimed) await perform("season_claim",item.code);
+    return;
+  }
+  if (target.dataset.seasonEquip) {
+    const code=target.dataset.seasonEquip,start=target.dataset.seasonStart;
+    const item=ui.season?.titles?.find(t=>t.code===code&&t.season_start===start);
+    if(item&&!item.equipped) {
+      confirmDialog("Надеть титул?",
+        "Титул «"+item.title+"» появится на главной странице общего питомца для обоих хозяев.",
+        ()=>perform("season_equip",code,{season_start:start}));
+    }
+    return;
+  }
+  if (target.dataset.seasonClear) {
+    confirmDialog("Снять титул?",
+      "Титул останется в коллекции и его можно будет надеть снова.",
+      ()=>perform("season_equip","",{season_start:""}));
+    return;
+  }
   if (target.dataset.click==="league") {tap();goToTab("league");return;}
   if (target.dataset.click==="league-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.leagueRefresh) {await loadLeague({force:true,quiet:false});return;}
@@ -854,6 +925,7 @@ document.addEventListener("visibilitychange", () => {
     refreshPet();
     if(ui.tab==="market") loadMarket({force:true});
     if(ui.tab==="league") loadLeague({force:true});
+    if(ui.tab==="season") loadSeason({force:true});
   }
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
