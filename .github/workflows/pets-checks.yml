@@ -28,3 +28,5 @@ jobs:
           python test_pet_outage.py
           python test_pet_game.py
           python test_pet_event_atomic.py
+      - name: Native Rich Message smoke tests
+        run: python test_rich_ui.py
