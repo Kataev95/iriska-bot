@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import time
 from datetime import datetime
@@ -144,16 +145,16 @@ async def send_pet_photo(
         ReplyParameters(message_id=reply_to, allow_sending_without_reply=True)
         if reply_to else None
     )
-    # Native Rich Message with media, headings, tables and inline keyboard.
-    # An older Telegram server falls back to the existing photo card below.
-    try:
-        return await send_rich(
-            bot, chat_id, caption, html=rich_html,
-            image_url=asset_url(key), reply_to_message_id=reply_to,
-            reply_markup=markup, fallback=False,
-        )
-    except TelegramBadRequest as exc:
-        logger.info("Rich pet image unsupported, use legacy photo: %s", exc)
+    # Test-mode/legacy-mode keeps the existing photo card (no UI migration).
+    if os.environ.get("RICH_MESSAGES_ENABLED", "1") != "0":
+        try:
+            return await send_rich(
+                bot, chat_id, caption, html=rich_html,
+                image_url=asset_url(key), reply_to_message_id=reply_to,
+                reply_markup=markup, fallback=False,
+            )
+        except TelegramBadRequest as exc:
+            logger.info("Rich pet image unsupported, use legacy photo: %s", exc)
     media, from_disk = await _media(db, key)
     if media is not None and len(caption) <= 1024:
         for _ in range(2):
