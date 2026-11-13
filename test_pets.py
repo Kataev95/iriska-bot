@@ -429,7 +429,13 @@ async def check_menu(db, cfg, pet_id, say, press, body, session,
         edits, answers = await press(C, f"pm:main:{pet_id}", photo=True)
         assert answers[0].show_alert and not edits
         # Поиграть: A, затем B — «вдвоём»
-        await db_.execute("UPDATE pets SET food=50, joy=40, energy=80 WHERE id=?", (pet_id,))
+        # Tie the fixture's care clock to the frozen local noon too.
+        # Otherwise a CI run just after midnight decays ~12h of joy before
+        # this assertion and fails despite correct game logic.
+        await db_.execute(
+            "UPDATE pets SET food=50, joy=40, energy=80, care_ts=? WHERE id=?",
+            (noon.timestamp(), pet_id),
+        )
         await db_.commit()
         edits, answers = await press(A, f"pm:play:{pet_id}", photo=True)
         assert edits and "мячиком" in body(edits[0]), body(edits[0]) if edits else answers
