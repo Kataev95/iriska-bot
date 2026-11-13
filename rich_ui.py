@@ -74,7 +74,15 @@ def asset_url(key: str) -> str:
             f"assets/pets/{key}.jpg")
 
 
-def _payload(html: str, image_url: str | None = None) -> dict[str, str]:
+def _payload(
+    html: str, image_url: str | None = None, image_media: str | None = None,
+) -> dict[str, Any]:
+    """A native Rich Message may refer to a reusable photo upload or URL."""
+    if image_media:
+        return {
+            "html": '<figure><img src="tg://photo?id=pet"/></figure>' + html,
+            "media": [{"id": "pet", "media": {"type": "photo", "media": image_media}}],
+        }
     if image_url:
         return {"html": f'<figure><img src="{escape(image_url, quote=True)}"/></figure>' + html}
     return {"html": html}
@@ -96,6 +104,7 @@ async def _plain_send(bot, chat_id, text, *, reply_markup=None,
 async def send_rich(
     bot, chat_id: int | str, text: str, *, html: str | None = None,
     image_url: str | None = None,
+    image_media: str | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
     reply_parameters: ReplyParameters | None = None,
     reply_to_message_id: int | None = None,
@@ -116,12 +125,17 @@ async def send_rich(
     doc = html or panel_html(text)
     try:
         return await bot(_SendRich(
-            chat_id=chat_id, rich_message=_payload(doc, image_url),
+            chat_id=chat_id, rich_message=_payload(doc, image_url, image_media),
             reply_markup=reply_markup, reply_parameters=reply_parameters,
             disable_notification=disable_notification,
         ))
     except (TelegramBadRequest, TelegramNotFound) as exc:
-        if image_url:
+        logger.warning("Rich send failed (media=%s): %s",
+                       bool(image_url or image_media), exc)
+        if not fallback:
+            # Card sender can retry through a second Rich photo transport.
+            raise
+        if image_url or image_media:
             try:
                 return await bot(_SendRich(
                     chat_id=chat_id, rich_message=_payload(doc),
@@ -130,9 +144,7 @@ async def send_rich(
                 ))
             except (TelegramBadRequest, TelegramNotFound) as second:
                 exc = second
-        if not fallback:
-            raise exc
-        logger.warning("Rich send unavailable: %s", exc)
+        logger.warning("Rich send without photo unavailable: %s", exc)
         return await _plain_send(
             bot, chat_id, text, reply_markup=reply_markup,
             reply_parameters=reply_parameters,
@@ -158,6 +170,7 @@ async def edit_rich_by_id(
     bot, chat_id: int | str, message_id: int, text: str, *,
     html: str | None = None,
     image_url: str | None = None,
+    image_media: str | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> bool:
     if os.environ.get('RICH_MESSAGES_ENABLED', '1') == '0':
@@ -170,23 +183,13 @@ async def edit_rich_by_id(
     try:
         await bot(_EditRich(
             chat_id=chat_id, message_id=message_id,
-            rich_message=_payload(doc, image_url), reply_markup=reply_markup,
+            rich_message=_payload(doc, image_url, image_media), reply_markup=reply_markup,
         ))
         return True
     except (TelegramBadRequest, TelegramNotFound) as exc:
         if "not modified" in str(exc):
             return True
-        if image_url:
-            try:
-                await bot(_EditRich(
-                    chat_id=chat_id, message_id=message_id,
-                    rich_message=_payload(doc), reply_markup=reply_markup,
-                ))
-                return True
-            except (TelegramBadRequest, TelegramNotFound) as second:
-                if "not modified" in str(second):
-                    return True
-                raise second from exc
+        # A retry without the photo silently removes it from the existing HUD.
         raise
 
 
@@ -194,6 +197,7 @@ async def edit_rich(
     message: Message, text: str, *,
     html: str | None = None,
     image_url: str | None = None,
+    image_media: str | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> bool:
     """Prefer editing one HUD. Old photo cards still support caption edits."""
@@ -201,10 +205,14 @@ async def edit_rich(
         try:
             return await edit_rich_by_id(
                 message.bot, message.chat.id, message.message_id, text,
-                html=html, image_url=image_url, reply_markup=reply_markup,
+                html=html, image_url=image_url, image_media=image_media,
+                reply_markup=reply_markup,
             )
         except (TelegramBadRequest, TelegramNotFound) as exc:
-            logger.warning("Rich edit unavailable: %s", exc)
+            logger.warning("Rich edit failed; preserving original rich content: %s", exc)
+            if os.environ.get("RICH_MESSAGES_ENABLED", "1") != "0":
+                # Do NOT use message.edit_text() here: that destroys Rich content.
+                return False
     try:
         if message.photo:
             await message.edit_caption(caption=text[:1024], reply_markup=reply_markup)
