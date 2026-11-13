@@ -111,7 +111,7 @@ class BusinessGameTests(unittest.IsolatedAsyncioTestCase):
             self.db.start_business_job(self.pet_id,102,"florist",NOW,TZ),
         )
         self.assertEqual(sum(x.startswith("✅") for x in results),1,results)
-        self.assertIn("запущена",results[0]+results[1])
+        self.assertTrue(any("Производство запущено" in msg for msg in results))
         self.assertEqual((await self.materials())["leaf"],before["leaf"]-3)
         self.assertEqual((await self.day_state())["starts_remaining"],3)
         job=(await self.day_state())["units"]["florist"]["job"]
@@ -133,6 +133,46 @@ class BusinessGameTests(unittest.IsolatedAsyncioTestCase):
         await self.db.connect()
         self.assertEqual((await self.day_state())["units"]["florist"]["stock"],2)
         self.assertEqual((await self.day_state())["starts_remaining"],3)
+
+    async def test_collect_failure_rolls_back_claim_and_goods(self):
+        await self.seed(wood=7,leaf=9)
+        await self.build("florist")
+        await self.db.start_business_job(self.pet_id,101,"florist",NOW,TZ)
+        batch=(await self.day_state())["units"]["florist"]["job"]
+        self.assertIsNotNone(batch)
+        await self.db._require().execute(
+            "CREATE TRIGGER fail_goods BEFORE INSERT ON pet_business_goods "
+            "BEGIN SELECT RAISE(ABORT,'fail stock'); END"
+        )
+        await self.db._require().commit()
+        with self.assertRaises(sqlite3.IntegrityError):
+            await self.db.collect_business_job(
+                self.pet_id,101,"florist",batch["id"],NOW+1000
+            )
+        self.assertIsNotNone((await self.day_state())["units"]["florist"]["job"])
+        self.assertEqual((await self.day_state())["units"]["florist"]["stock"],0)
+        await self.db._require().execute("DROP TRIGGER fail_goods")
+        await self.db._require().commit()
+        self.assertTrue((await self.db.collect_business_job(
+            self.pet_id,101,"florist",batch["id"],NOW+1000)).startswith("✅"))
+        self.assertEqual((await self.day_state())["units"]["florist"]["stock"],2)
+
+    async def test_double_sale_one_stock_cannot_mint_twice(self):
+        await self.db._require().execute(
+            "INSERT INTO pet_business_goods(pet_id,business,quantity) VALUES(?,?,?)",
+            (self.pet_id,"carpenter",1),
+        )
+        await self.db._require().commit()
+        results=await asyncio.gather(
+            self.db.sell_business_goods(self.pet_id,101,"carpenter",NOW,TZ),
+            self.db.sell_business_goods(self.pet_id,102,"carpenter",NOW,TZ),
+        )
+        self.assertEqual(sum(msg.startswith("✅") for msg in results),1,results)
+        total=(await self.db.get_user(CHAT,101))["balance"]+(
+            await self.db.get_user(CHAT,102))["balance"]
+        self.assertEqual(total,3)
+        self.assertEqual((await self.day_state())["units"]["carpenter"]["stock"],0)
+        self.assertEqual((await self.day_state())["sales_coins_remaining"],9)
 
     async def test_shared_daily_start_limit_across_businesses(self):
         await self.seed(wood=100,leaf=100,stone=30)
