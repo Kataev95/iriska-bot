@@ -280,3 +280,100 @@ async def cmd_order_refund(
 ) -> None:
     """Отменяет заказ и возвращает ириски: /order_refund 12."""
     await _order_action(message, command.args or "", db, refund=True)
+
+
+# ---------- разовая амнистия после простоя (ноябрь 2026) ----------
+
+@router.message(Command("pet_amnesty"))
+async def cmd_pet_amnesty(
+    message: Message, command: CommandObject, db: Database, config: Config,
+) -> None:
+    """Ручное восстановление питомцев + 100 🍬 каждому владельцу в его чате.
+
+    Чтобы не допустить ошибочного массового начисления, требуется точный
+    Telegram ID администратора из ADMIN_IDS, личка и явное подтверждение.
+    """
+    from html import escape
+
+    from pet_amnesty import apply, backup_database, preview
+
+    if message.from_user is None or message.from_user.id not in config.admin_ids:
+        await message.reply(
+            "🔒 Эта операция доступна только ID из ADMIN_IDS. "
+            "Узнай свой ID командой /id и добавь его в настройки бота."
+        )
+        return
+    if message.chat.type != "private":
+        await message.reply("🔒 Запусти /pet_amnesty в личке бота.")
+        return
+
+    info = await preview(db)
+    if info["applied"]:
+        await message.reply(
+            "✅ Амнистия за ноябрь 2026 уже была проведена. "
+            "Второй раз 100 ирисок не начисляю.\n"
+            f"Отметка: <code>{escape(str(info['marker']))}</code>"
+        )
+        return
+    if info["pets"] == 0:
+        await message.reply(
+            "⚠️ В этой базе нет ни одного активного питомца. "
+            "Начисления не делал. Проверь DB_PATH и подключённый постоянный "
+            "том с прежней базой данных."
+        )
+        return
+
+    if (command.args or "").strip() != "APPLY_2026_11":
+        await message.reply(
+            "🐾 <b>Амнистия питомцев за простой бота</b>\n\n"
+            f"Всего активных питомцев (включая яйца): <b>{info['pets']}</b>\n"
+            f"Сбежавших сейчас: <b>{info['away']}</b>\n"
+            f"Из них серия доступна лишь по рекорду: <b>{info['fallback']}</b>\n"
+            f"Получателей (уникально в каждом чате): <b>{info['owners']}</b>\n"
+            f"К начислению: <b>{info['total_bonus']}</b> 🍬\n\n"
+            "Серии сбежавших восстановлю бесплатно, "
+            "каждому владельцу начислю <b>100 🍬</b> в каждом его чате. "
+            "Если lost_streak уже утрачен, за основу возьму лучший рекорд "
+            "(он может быть старше простоя). Не трогаю добровольно "
+            "брошенных питомцев.\n\n"
+            "Создам резервную копию SQLite перед изменениями. "
+            "Операция доступна <b>один раз</b>.\n"
+            "Подтвердить: <code>/pet_amnesty APPLY_2026_11</code>"
+        )
+        return
+
+    try:
+        backup_path = await backup_database(db)
+    except Exception:
+        await message.reply(
+            "❌ Не удалось сделать резервную копию базы. "
+            "Амнистию НЕ запускал. Проверь свободное место и права на каталог БД."
+        )
+        return
+
+    try:
+        result = await apply(db, config, message.from_user.id)
+    except Exception:
+        await message.reply(
+            "❌ Во время операции произошла ошибка, транзакция отменена. "
+            f"Резервная копия: <code>{escape(backup_path)}</code>"
+        )
+        return
+    if result["status"] != "ok":
+        await message.reply(
+            "Амнистия не выполнена (уже применена или нет питомцев). "
+            f"Копия: <code>{escape(backup_path)}</code>"
+        )
+        return
+    await message.reply(
+        "✅ <b>Амнистия проведена!</b>\n"
+        f"🐾 Возвращено сбежавших: <b>{result['restored']}</b>\n"
+        f"🛡 Сохранено серий живых питомцев: <b>{result['protected']}</b>\n"
+        f"🍬 Получили по 100 ирисок: <b>{result['owners']}</b> "
+        f"(учёт отдельно по каждому чату)\n"
+        f"💰 Начислено всего: <b>{result['total_bonus']}</b> 🍬\n"
+        f"💾 Копия БД: <code>{escape(backup_path)}</code>\n"
+        "Двойное начисление заблокировано. "
+        "Чтобы серия не сбежала снова, сегодня оба хозяина "
+        "должны написать друг другу."
+    )
