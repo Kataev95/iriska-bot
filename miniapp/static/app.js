@@ -84,6 +84,85 @@ async function api(path, payload) {
     throw e;
   } finally {clearTimeout(timer);}
 }
+
+/* PETS 1.2 — decorative UI feedback only (no change to XP, energy or currency). */
+const effects = document.getElementById("effects");
+const careSymbols = {feed:"🍖",play:"🎾",sleep:"💤"};
+let effectTimer = null;
+function playEffect(label, type="sparkle") {
+  if (document.hidden || !effects) return;
+  effects.replaceChildren();
+  const card = document.createElement("div");
+  card.className = "effect-card effect-"+type;
+  card.textContent = String(label);
+  effects.append(card);
+  // Only twelve short-lived, compositor-friendly particles; no canvas loop.
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    for (let i=0; i<12; i++) {
+      const particle = document.createElement("span");
+      particle.className = "effect-particle";
+      particle.textContent = (i%3===0 ? "✦" : i%3===1 ? "💖" : "✨");
+      particle.style.setProperty("--particle-index", String(i));
+      particle.style.setProperty("--particle-angle", (i*30)+"deg");
+      particle.style.setProperty("--particle-distance", (72+(i%4)*16)+"px");
+      effects.append(particle);
+    }
+  }
+  clearTimeout(effectTimer);
+  effectTimer = setTimeout(() => effects.replaceChildren(), 1900);
+}
+function petGreeting() {
+  const pet = ui.pet;
+  if (!pet || ui.busy) return;
+  haptic("soft");
+  playEffect("💚 "+pet.name+" рад встрече!", "greeting");
+  const hero = app.querySelector(".hero");
+  if (!hero) return;
+  hero.classList.remove("pet-waving");
+  // Restart the short CSS animation for another intentional tap.
+  void hero.offsetWidth;
+  hero.classList.add("pet-waving");
+  setTimeout(() => hero.classList.remove("pet-waving"), 700);
+}
+function showActionEffect(kind, code, before, after, message) {
+  if (!before || !after || before.id !== after.id) return;
+  if (after.level > before.level) {
+    playEffect("🎉 Новый уровень! "+after.level+" / 20", "level");
+    haptic("success");
+    return;
+  }
+  // Announce only changes confirmed in the authoritative DB snapshot.
+  if (kind === "care" && (message.startsWith("✅") || message.startsWith("💕"))) {
+    playEffect((careSymbols[code]||"💗")+" "+after.name+" доволен!", "care");
+    return;
+  }
+  if (kind === "buy" && after.balance < before.balance) {
+    playEffect("🛍 Покупка успешна", "purchase");
+    return;
+  }
+  if (kind === "wear" && before.worn.join(",") !== after.worn.join(",")) {
+    playEffect("🎀 Образ обновлён", "care");
+    return;
+  }
+  if (kind === "profession" && before.profession !== after.profession) {
+    playEffect("🎓 Новая профессия!", "level");
+    return;
+  }
+  let success = false;
+  if (kind === "claim") {
+    success = Boolean(before.trip && !after.trip);
+  } else if (kind === "daily") {
+    const previous = before.daily.filter(t => t.claimed).length;
+    success = after.daily.filter(t => t.claimed).length > previous;
+  }
+  if (success) {
+    const xp = Math.max(0,after.xp-before.xp);
+    const coins = Math.max(0,after.balance-before.balance);
+    const gain = [xp>0?"⭐ +"+xp+" XP":"",coins>0?"🍬 +"+coins:""].filter(Boolean).join("  ");
+    playEffect(gain || "🎁 Награда получена!", "reward");
+  }
+}
+
 function renderPicker() {
   if (ui.pets.length < 2) return "";
   const options = ui.picker ? '<div>'+ui.pets.map(p=>
@@ -98,7 +177,9 @@ function hero(p) {
   const progress = p.next_xp == null ? 100 :
     Math.min(100,Math.max(0,Math.round((p.xp-prior)/Math.max(1,target-prior)*100)));
   return '<div class="hero"><div class="hero-overlay">✨ Уровень '+p.level+' / 20</div>'+
-    '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'"></div>'+
+    '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'" decoding="async">'+
+    '<button type="button" class="pet-touch" data-click="pet-greet" aria-label="Поздороваться с питомцем — визуальный эффект, без затрат ирисок">'+
+      '<span class="pet-hint" aria-hidden="true">✨ Поприветствовать</span></button></div>'+
     '<div class="panel"><div class="eyebrow">МОЙ ПИТОМЕЦ</div>'+
     '<div class="row"><div><div class="hero-title">'+safe(p.name)+'</div>'+
     '<div class="subtitle">🤝 Вместе с '+safe(p.partner)+'</div></div>'+
@@ -166,8 +247,16 @@ function trips(p) {
 }
 function tasks(p) {
   const claimable = p.daily.some(x=>x.done&&!x.claimed);
+  const done = p.daily.filter(x=>x.done).length;
+  const count = p.daily.length;
+  const percent = count ? Math.round(done/count*100) : 0;
   return '<div class="section-heading">📋 Ежедневные задания</div>'+
     '<p class="section-lead">Выполняйте действия вдвоём. Опыт общий у питомца.</p>'+
+    '<div class="panel task-summary"><div class="row"><strong>🌟 Прогресс дня</strong>'+
+       '<span class="chip chip-green">'+done+' / '+count+'</span></div>'+
+       '<div class="progress task-progress" role="progressbar" aria-label="Выполненные задания" aria-valuemin="0" aria-valuemax="'+count+'" aria-valuenow="'+done+'">'+
+       '<i style="width:'+percent+'%"></i></div>'+
+       '<p class="subtitle">'+(done===count?'Все задания выполнены!':'Продолжай ухаживать и путешествовать')+'</p></div>'+
     p.daily.map(t=>'<div class="panel"><div class="card-row"><div class="card-icon">'+
       (t.claimed?'🎁':t.done?'✅':'▫️')+'</div><div class="card-text"><strong>'+
       safe(t.name)+'</strong><small>'+ (t.claimed?'Награда получена':t.done?'Готово к получению':'Ещё не выполнено')+
@@ -338,8 +427,12 @@ async function perform(kind, code="", extra={}) {
   app.classList.add("is-busy");
   tap();
   try {
+    const before = ui.pet;
     const result = await api('/api/action', {pet_id:id,kind,code,...extra});
-    if (ui.selected === id) setPet(result.pet);
+    if (ui.selected === id) {
+      setPet(result.pet);
+      showActionEffect(kind, code, before, result.pet, result.message);
+    }
     showToast(result.message);
     if (result.message.startsWith("✅") || result.message.startsWith("💕")) haptic("success");
   } catch(e) {
@@ -356,6 +449,7 @@ document.addEventListener("click", async e=>{
   if (target.dataset.group) {ui.group=target.dataset.group;tap();render();return;}
   if (target.dataset.pet) {try{await loadPet(Number(target.dataset.pet));}catch(err){showToast(err.message);}return;}
   if (target.dataset.click==="picker") {ui.picker=!ui.picker;render();return;}
+  if (target.dataset.click==="pet-greet") {petGreeting();return;}
   if (target.dataset.click==="wardrobe") {tap();goToTab("wardrobe");return;}
   if (target.dataset.click==="refresh") {await refreshPet({force:true,quiet:false});return;}
   if(target.dataset.buy) {
