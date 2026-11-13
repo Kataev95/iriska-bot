@@ -16,6 +16,7 @@ from pet_care import (
     parse_set,
 )
 from pet_game import DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS, legacy_xp, level_for
+from pet_inventory import MATERIALS, RECIPES, loot_for, loot_summary
 
 
 class PetGameDatabase:
@@ -51,6 +52,28 @@ class PetGameDatabase:
                 pet_id INTEGER NOT NULL, day TEXT NOT NULL, task TEXT NOT NULL,
                 PRIMARY KEY(pet_id, day, task)
             );
+            -- Materials belong to the shared pet, not one of its owners.
+            CREATE TABLE IF NOT EXISTS pet_materials (
+                pet_id INTEGER NOT NULL,
+                material TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+                PRIMARY KEY(pet_id, material)
+            );
+            -- Only one drop receipt per expedition/material for transparent audit.
+            CREATE TABLE IF NOT EXISTS pet_material_drops (
+                trip_id INTEGER NOT NULL,
+                material TEXT NOT NULL,
+                quantity INTEGER NOT NULL CHECK(quantity > 0),
+                PRIMARY KEY(trip_id, material)
+            );
+            -- Crafting a trophy is one-time and shared by both owners.
+            CREATE TABLE IF NOT EXISTS pet_crafts (
+                pet_id INTEGER NOT NULL,
+                recipe TEXT NOT NULL,
+                crafted_at REAL NOT NULL,
+                PRIMARY KEY(pet_id, recipe)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pet_crafts_pet ON pet_crafts(pet_id);
         """)
         marker = await (
             await db.execute("SELECT value FROM bot_meta WHERE key='pets3_migrated'")
@@ -347,7 +370,98 @@ class PetGameDatabase:
                 "INSERT OR IGNORE INTO pet_daily_activity VALUES(?,?,?,'adventure')",
                 (pet_id, day, user_id),
             )
-            return f"{ROUTES[trip['route']].story}\n⭐ +{trip['xp']} XP питомцу, 🍬 +{trip['coins']} отправившему хозяину."
+            # ONE transaction covers trip closure, XP, coins and materials.
+            # A second claim sees claimed_at and never enters this section.
+            loot = loot_for(trip["route"])
+            for material, quantity in loot.items():
+                await db.execute(
+                    "INSERT INTO pet_material_drops(trip_id,material,quantity) "
+                    "VALUES(?,?,?)",
+                    (trip_id, material, quantity),
+                )
+                await db.execute(
+                    "INSERT INTO pet_materials(pet_id,material,quantity) "
+                    "VALUES(?,?,?) ON CONFLICT(pet_id,material) "
+                    "DO UPDATE SET quantity=quantity+excluded.quantity",
+                    (pet_id, material, quantity),
+                )
+            return (
+                f"{ROUTES[trip['route']].story}\n"
+                f"⭐ +{trip['xp']} XP питомцу, 🍬 +{trip['coins']} отправившему хозяину."
+                + (f"\n🎒 В общий рюкзак: {loot_summary(loot)}." if loot else "")
+            )
+
+    async def inventory_state(self, pet_id):
+        """Read-only summary; the Mini App verifies ownership before calling."""
+        db = self._require()
+        resource_rows = await (
+            await db.execute(
+                "SELECT material,quantity FROM pet_materials WHERE pet_id=?",
+                (pet_id,),
+            )
+        ).fetchall()
+        craft_rows = await (
+            await db.execute(
+                "SELECT recipe FROM pet_crafts WHERE pet_id=? ORDER BY crafted_at",
+                (pet_id,),
+            )
+        ).fetchall()
+        # Fixed shape: old pets simply begin with an empty backpack.
+        quantities = {code: 0 for code in MATERIALS}
+        for row in resource_rows:
+            if row["material"] in quantities:
+                quantities[row["material"]] = int(row["quantity"])
+        return quantities, [row["recipe"] for row in craft_rows]
+
+    async def craft_trophy(self, pet_id, user_id, recipe_code, now):
+        """Atomic craft shared by both owners. No coins involved."""
+        recipe = RECIPES.get(recipe_code)
+        if recipe is None:
+            return "Неизвестный чертёж"
+        async with self._game_transaction() as db:
+            pet = await self._game_pet(db, pet_id, user_id)
+            if pet is None or not int(pet["best_streak"]):
+                return "Питомец недоступен"
+            exists = await (
+                await db.execute(
+                    "SELECT 1 FROM pet_crafts WHERE pet_id=? AND recipe=?",
+                    (pet_id, recipe_code),
+                )
+            ).fetchone()
+            if exists:
+                return "Эта вещь уже изготовлена"
+            # Check every ingredient before making any deductions.
+            stocks = {
+                row["material"]: int(row["quantity"])
+                for row in await (
+                    await db.execute(
+                        "SELECT material,quantity FROM pet_materials WHERE pet_id=?",
+                        (pet_id,),
+                    )
+                ).fetchall()
+            }
+            missing = [
+                f"{MATERIALS[code].icon} {MATERIALS[code].title}: "
+                f"{quantity - stocks.get(code, 0)}"
+                for code, quantity in recipe.ingredients
+                if stocks.get(code, 0) < quantity
+            ]
+            if missing:
+                return "Не хватает материалов: " + ", ".join(missing)
+            for code, quantity in recipe.ingredients:
+                cur = await db.execute(
+                    "UPDATE pet_materials SET quantity=quantity-? "
+                    "WHERE pet_id=? AND material=? AND quantity>=?",
+                    (quantity, pet_id, code, quantity),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError("Материалы изменились — транзакция отменена")
+            await db.execute(
+                "INSERT INTO pet_crafts(pet_id,recipe,crafted_at) VALUES(?,?,?)",
+                (pet_id, recipe_code, now),
+            )
+            return f"✅ {recipe.icon} Изготовлено: {recipe.title}. Сувенир общий для вас двоих!"
+
 
     async def choose_profession(self, pet_id, user_id, code):
         if code not in PROFESSIONS:
