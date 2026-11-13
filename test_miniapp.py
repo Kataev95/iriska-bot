@@ -484,6 +484,61 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(before["balance"],after["balance"])
         self.assertEqual(before["earned_total"],after["earned_total"])
 
+    async def test_private_season_claim_and_cosmetic_equip(self):
+        from datetime import datetime
+        from pet_season import season_bounds
+        self.assertEqual((await self.client.get("/api/season/1")).status, 401)
+        self.assertEqual((await self.client.get("/api/season/2",
+            headers=self.headers)).status, 403)
+        self.assertEqual((await self.client.get("/api/season/1",
+            headers={"X-Telegram-Init-Data": signed(201)})).status, 403)
+        result=await self.client.get("/api/season/1",headers=self.headers)
+        self.assertEqual(result.status,200)
+        initial=await result.json()
+        self.assertEqual(len(initial["challenges"]),5)
+        self.assertEqual(initial["titles"],[])
+        self.assertIn("seconds_left",initial["season"])
+        before=await self.db.get_user(CHAT_ID,101)
+        # Forgeries cannot bypass the current server-side season goals.
+        premature=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"season_claim","code":"star","score":999999})
+        self.assertEqual(premature.status,200)
+        self.assertIn("🔒",(await premature.json())["message"])
+        outsider=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":2,"kind":"season_claim","code":"explorer"})
+        self.assertEqual(outsider.status,403)
+        now=time.time()
+        _,_,start_day,_,_=season_bounds(now,self.config.tz)
+        day=datetime.fromtimestamp(now,self.config.tz).date().isoformat()
+        for i in range(3):
+            await self.db._require().execute(
+                "INSERT INTO pet_trips"
+                "(pet_id,user_id,day,route,started_at,finish_at,xp,coins,claimed_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (1,101,day,"park",now-500-i,now-5,35,2,now),
+            )
+        await self.db._require().commit()
+        claim=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"season_claim","code":"explorer"})
+        self.assertEqual(claim.status,200)
+        self.assertIn("Получен титул",(await claim.json())["message"])
+        repeated=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"season_claim","code":"explorer"})
+        self.assertIn("уже получена",(await repeated.json())["message"])
+        equip=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"season_equip","code":"explorer",
+                  "season_start":start_day,"currency":9999})
+        self.assertEqual(equip.status,200)
+        equipped=await equip.json()
+        self.assertIn("Следопыт",equipped["pet"]["season_title"])
+        my_season=await self.client.get("/api/season/1",headers=self.headers)
+        progress=await my_season.json()
+        self.assertEqual(progress["claimed_count"],1)
+        self.assertTrue(progress["titles"][0]["equipped"])
+        after=await self.db.get_user(CHAT_ID,101)
+        self.assertEqual((before["balance"],before["earned_total"]),
+                         (after["balance"],after["earned_total"]))
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -523,7 +578,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=5", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=9", html)
+        self.assertIn("/static/app.js?v=10", html)
+        self.assertIn("/static/season.js?v=1", html)
+        self.assertIn("/static/season.css?v=1", html)
         self.assertIn("/static/league.js?v=1", html)
         self.assertIn("/static/league.css?v=1", html)
         self.assertIn("/static/market.css?v=1", html)
@@ -570,6 +627,10 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('window.PetsLeague.renderLeague', js)
         self.assertIn('league-scene', (static/"league.css").read_text(encoding="utf-8"))
         self.assertIn('league-rank-row', (static/"league.js").read_text(encoding="utf-8"))
+        self.assertIn('window.PetsSeason.renderSeason', js)
+        self.assertIn('season-hero', (static/"season.css").read_text(encoding="utf-8"))
+        self.assertIn('data-season-claim=', (static/"season.js").read_text(encoding="utf-8"))
+        self.assertIn('data-season-equip=', (static/"season.js").read_text(encoding="utf-8"))
 
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
@@ -578,7 +639,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("app.js", "house.js", "business.js", "market.js", "league.js"):
+        for name in ("app.js", "house.js", "business.js", "market.js", "league.js", "season.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
