@@ -5,6 +5,25 @@ const wallet = document.getElementById("wallet");
 const modal = document.getElementById("modal");
 const toast = document.getElementById("toast");
 
+// Telegram owns the native Close / Collapse controls in Fullscreen.
+ // We cannot move those buttons; keep PETS' own header below their safe area.
+function syncSafeArea() {
+  if (!TG) return;
+  const root = document.documentElement.style;
+  const apply = (obj, side, name) => {
+    const px = obj?.[side];
+    if (Number.isFinite(px) && px >= 0 && px < 500) root.setProperty(name, px + "px");
+  };
+  apply(TG.safeAreaInset, "top", "--pets-sdk-safe-top");
+  apply(TG.safeAreaInset, "bottom", "--pets-sdk-safe-bottom");
+  apply(TG.contentSafeAreaInset, "top", "--pets-sdk-content-top");
+  apply(TG.contentSafeAreaInset, "bottom", "--pets-sdk-content-bottom");
+}
+for (const event of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenChanged", "viewportChanged"]) {
+  try { TG?.onEvent?.(event, syncSafeArea); } catch { /* old Telegram WebView */ }
+}
+syncSafeArea();
+
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
              group: "food", busy: false, toastTimer: 0, picker: false };
 const tabs = [
@@ -234,6 +253,7 @@ async function boot() {
   try {
     TG?.ready();
     TG?.expand();
+    syncSafeArea();
     if(!TG?.initData) throw new Error("Открой Mini App через кнопку бота в Telegram.");
     ui.config=await api("/api/bootstrap");
     ui.pets=ui.config.pets;
