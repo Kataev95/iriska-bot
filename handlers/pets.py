@@ -11,7 +11,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
-from rich_ui import reply_rich, send_rich
+from rich_ui import edit_rich, reply_rich, rich_table, send_rich
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
@@ -222,7 +222,7 @@ async def on_pet_callback(callback: CallbackQuery, db: Database, config: Config)
         if message is None:
             return
         try:
-            await message.edit_text(text, reply_markup=None)
+            await edit_rich(message, text, reply_markup=None)
         except TelegramBadRequest:
             pass
 
@@ -305,7 +305,21 @@ async def cmd_pet_top(message: Message, db: Database, config: Config) -> None:
             f"{place(i)} {pet_title(p)} — {_plain(names, p['user_a'])} и "
             f"{_plain(names, p['user_b'])} • {tail}"
         )
-    await reply_rich(message, "\n".join(lines))
+    html = (
+        "<h2>🏆 Топ питомцев чата</h2>"
+        + rich_table(
+            ["№", "Питомец", "Хозяева", "Уровень", "🔥 Дни"],
+            [
+                [
+                    str(i), pet_title(p), _plain(names, p["user_a"]) + " и " + _plain(names, p["user_b"]),
+                    str(level_for(p["xp"])), str(p["streak"]),
+                ]
+                for i, p in enumerate(top, 1)
+            ],
+        )
+        + "<footer>Рейтинг по лучшей серии. Прогресс и опыт сохраняются.</footer>"
+    )
+    await reply_rich(message, "\n".join(lines), html=html)
 
 
 @router.message(GroupF, trig(HELP_TRIGGERS))

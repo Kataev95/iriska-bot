@@ -30,7 +30,7 @@ def button(text, action, pid, arg=""):
 
 
 def game_hud_html(pet, action: str, note: str, now: float, trip=None,
-                  day: str = "", completed=None, claimed=None) -> str:
+                  day: str = "", completed=None, claimed=None, arg: str = "") -> str:
     from html import escape as html_escape
 
     level = level_for(pet["xp"])
@@ -64,8 +64,11 @@ def game_hud_html(pet, action: str, note: str, now: float, trip=None,
             doc.append(f"<p>✅ Выбрана: {PROFESSIONS[pet['profession']][0]}</p>")
         elif level < 5:
             doc.append("<p>🔒 Откроется с 5 уровня.</p>")
-        elif action == "confirm" and note == "":
-            doc.append("<p>Подтвердите выбор кнопкой. Пока он постоянный.</p>")
+        elif action == "confirm" and arg in PROFESSIONS:
+            doc.append(
+                f"<blockquote>Подтвердить выбор: {html_escape(PROFESSIONS[arg][0])}? "
+                "Выбор общий для двоих и пока не меняется.</blockquote>"
+            )
     elif trip:
         r = ROUTES[trip["route"]]
         remain = max(0, int((trip["finish_at"] - now) / 60))
@@ -224,7 +227,7 @@ async def on_game(callback: CallbackQuery, db: Database, config: Config):
         trip = await db.active_trip(pid)
     else:
         trip = None
-    html = game_hud_html(pet, action, note, now, trip, day, completed, claimed)
+    html = game_hud_html(pet, action, note, now, trip, day, completed, claimed, arg)
     try:
         if callback.message.photo:
             await answer_rich(callback.message, text, html=html, reply_markup=markup)
