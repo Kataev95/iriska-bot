@@ -34,6 +34,7 @@ const tabs = [
   ["growth","⭐","Развитие"],
 ];
 const emoji = {food:"🍪",wear:"🎀",freeze:"🧊",house:"🏠"};
+const resourceQuantity = (p, code) => Math.max(0,Number(p.materials?.[code] || 0));
 const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
   "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
 }[c]));
@@ -148,6 +149,11 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect("🎓 Новая профессия!", "level");
     return;
   }
+  if (kind === "craft" && !(before.crafts||[]).includes(code) && (after.crafts||[]).includes(code)) {
+    const recipe = ui.config.recipes.find(x=>x.code===code);
+    playEffect((recipe?.icon || "🎁")+" Новый сувенир!", "reward");
+    return;
+  }
   let success = false;
   if (kind === "claim") {
     success = Boolean(before.trip && !after.trip);
@@ -158,7 +164,11 @@ function showActionEffect(kind, code, before, after, message) {
   if (success) {
     const xp = Math.max(0,after.xp-before.xp);
     const coins = Math.max(0,after.balance-before.balance);
-    const gain = [xp>0?"⭐ +"+xp+" XP":"",coins>0?"🍬 +"+coins:""].filter(Boolean).join("  ");
+    const resources = ui.config.materials
+      .filter(m => resourceQuantity(after,m.code)>resourceQuantity(before,m.code))
+      .map(m => m.icon+" +"+(resourceQuantity(after,m.code)-resourceQuantity(before,m.code)));
+    const gain = [xp>0?"⭐ +"+xp+" XP":"",coins>0?"🍬 +"+coins:"",...resources]
+      .filter(Boolean).join("  ");
     playEffect(gain || "🎁 Награда получена!", "reward");
   }
 }
@@ -209,7 +219,22 @@ function home(p) {
     '<div class="panel"><div class="row"><strong>🎀 Гардероб</strong>'+
     '<button class="btn btn-quiet" data-click="wardrobe">Открыть →</button></div>'+
     '<p class="subtitle">'+p.items.length+' вещей · '+p.worn.length+' надето'+
-    (p.house ? ' · 🏠 Домик' : '')+'</p></div>';
+    (p.house ? ' · 🏠 Домик' : '')+'</p></div>'+
+    '<div class="panel backpack-link"><div class="row"><div><div class="h2">🎒 Общий рюкзак</div>'+
+    '<p class="subtitle">'+(p.crafts||[]).length+' сувениров · '+
+    ui.config.materials.reduce((sum,m)=>sum+resourceQuantity(p,m.code),0)+' материалов</p></div>'+
+    '<button class="btn btn-primary" data-click="inventory">Открыть →</button></div>'+
+    ((p.crafts||[]).length ?
+      '<div class="trophy-strip">'+ui.config.recipes.filter(r=>p.crafts.includes(r.code))
+        .map(r=>'<span class="chip chip-purple">'+safe(r.icon)+' '+safe(r.name)+'</span>').join('')+'</div>' : '')+
+    '</div>';
+}
+function routeLoot(route) {
+  if (!route || !route.loot) return '<span class="muted">Нет данных</span>';
+  return ui.config.materials.filter(m => route.loot[m.code] > 0).map(m =>
+    '<span class="chip material-chip '+safe(m.rarity)+'">'+safe(m.icon)+' +'+
+    value(route.loot[m.code])+' '+safe(m.name)+'</span>'
+  ).join("");
 }
 function trips(p) {
   if (p.trip) {
@@ -222,6 +247,8 @@ function trips(p) {
       '<div class="card-row"><div class="card-icon">🗺️</div><div class="card-text"><strong>'+safe(title)+'</strong>'+
       '<small data-trip-countdown>⏳ '+timeText+'</small></div></div>'+
       '<div class="route-info"><span class="chip">⭐ '+p.trip.xp+' XP</span><span class="chip">🍬 '+p.trip.coins+'</span></div>'+
+      '<p class="route-loot-title">🎒 Материалы после возвращения</p>'+
+      '<div class="route-loot">'+routeLoot(r)+'</div>'+
       (left ? '<button class="btn btn-wide" data-click="refresh">🔄 Обновить</button>' :
         '<button class="btn btn-primary btn-wide" data-action="claim" data-trip="'+p.trip.id+'">🎁 Забрать награду</button>')+
       '</div>';
@@ -229,6 +256,7 @@ function trips(p) {
   return '<div class="section-heading">🧭 Приключения</div>'+
     '<p class="section-lead">Выбирай маршрут, собирай награды и повышай уровень питомца.</p>'+
     '<div class="notice">🎟 Походов осталось сегодня: <b>'+value(p.trips_remaining ?? 3)+'/3</b></div>'+
+    '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>'+
     ui.config.routes.map(r => {
       const bonusXp = p.profession === "explorer" ? Math.floor(r.xp*1.2) : r.xp;
       const energy = r.energy-(p.profession==="artisan" ? 3:0);
@@ -241,6 +269,7 @@ function trips(p) {
         safe(r.name)+'</strong><small>Приключение · '+time+'</small></div></div>'+
         '<div class="route-info"><span class="chip">⚡ '+energy+'</span>'+
         '<span class="chip">⭐ '+bonusXp+' XP</span><span class="chip">🍬 '+coins+'</span></div>'+
+        '<div class="route-loot">🎒 '+routeLoot(r)+'</div>'+
         '<button class="btn btn-primary" data-action="start" data-code="'+safe(r.code)+'" '+
         (locked?'disabled':'')+'>'+(limited?'🔒 Лимит походов на сегодня':locked?'🔒 Мало энергии или еды':'🧭 Отправиться')+'</button></div>';
     }).join("");
@@ -298,8 +327,54 @@ function growth(p) {
       ui.config.professions.map(job=>'<div class="card-row" style="margin-top:14px">'+
         '<div class="card-text"><strong>'+safe(job.name)+'</strong><small>'+safe(job.effect)+'</small></div>'+
         '<button class="btn btn-primary" data-profession="'+safe(job.code)+'">Выбрать</button></div>').join("")
-    )+'</div><button class="btn btn-wide" data-click="wardrobe">🎀 Гардероб →</button>';
+    )+'</div><button class="btn btn-wide" data-click="wardrobe">🎀 Гардероб →</button>'+
+    '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>';
 }
+function inventory(p) {
+  const stock = p.materials || {};
+  const owned = p.crafts || [];
+  const total = ui.config.materials.reduce((count,m)=>count+resourceQuantity(p,m.code),0);
+  const rows = ui.config.materials.map(m => {
+    const count = resourceQuantity(p,m.code);
+    return '<div class="resource-card '+safe(m.rarity)+'">'+
+      '<div class="resource-icon">'+safe(m.icon)+'</div>'+
+      '<div class="resource-title">'+safe(m.name)+'</div>'+
+      '<div class="resource-stock">'+count+' шт.</div>'+
+      '<small>'+safe(m.description)+'</small></div>';
+  }).join('');
+  const recipes = ui.config.recipes.map(r => {
+    const done=owned.includes(r.code);
+    const costs=r.ingredients.map(i=>{
+      const m=ui.config.materials.find(x=>x.code===i.code);
+      const have=resourceQuantity(p,i.code);
+      return '<span class="material-cost '+(have>=i.quantity?'enough':'missing')+'">'+
+        safe(m?.icon||'📦')+' '+have+'/'+i.quantity+'</span>';
+    }).join('');
+    const canMake = r.ingredients.every(i=>resourceQuantity(p,i.code)>=i.quantity);
+    return '<div class="panel recipe-card"><div class="card-row">'+
+      '<div class="card-icon craft-icon">'+safe(r.icon)+'</div>'+
+      '<div class="card-text"><strong>'+safe(r.name)+'</strong><small>'+safe(r.description)+'</small></div>'+
+      (done?'<span class="chip chip-green">✅ Готово</span>':'')+'</div>'+
+      '<div class="recipe-costs">'+costs+'</div>'+
+      '<button class="btn btn-wide '+(done?'btn-quiet':'btn-primary')+'" '+
+      (!canMake||done?'disabled ':'')+'data-craft="'+safe(r.code)+'">'+
+      (done?'В коллекции':canMake?'🛠 Создать':'🔒 Нужно больше материалов')+'</button></div>';
+  }).join('');
+  return '<div class="section-heading">🎒 Рюкзак '+safe(p.name)+'</div>'+
+    '<p class="section-lead">Материалы и сувениры принадлежат двум хозяевам. '+
+    'Находки появляются только после получения награды похода.</p>'+
+    '<div class="panel inventory-total"><div><div class="eyebrow">СОБРАНО</div>'+
+      '<div class="title">'+total+' материалов</div></div>'+
+      '<span class="chip chip-purple">🏆 '+owned.length+' / '+ui.config.recipes.length+' сувениров</span></div>'+
+    '<h2 class="h2 inventory-heading">📦 Материалы</h2>'+
+    '<div class="resource-grid">'+rows+'</div>'+
+    '<h2 class="h2 inventory-heading">🛠 Мастерская</h2>'+
+    '<p class="section-lead">Создавайте коллекционные сувениры из найденных вещей. '+
+      'Пока они не дают бонусов к XP или ирискам.</p>'+recipes+
+    '<button class="btn btn-quiet btn-wide" data-click="inventory-back">← Назад</button>';
+}
+
+
 function wardrobe(p) {
   return '<div class="section-heading">🎀 Гардероб</div>'+
     '<p class="section-lead">Коллекция аксессуаров '+safe(p.name)+'. Изменения общие для пары.</p>'+
@@ -319,9 +394,9 @@ function render() {
   wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
   nav.classList.remove("hidden");
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
-    (ui.tab===id || ui.tab==='wardrobe'&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
+    (ui.tab===id || ['wardrobe','inventory'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
   app.innerHTML=renderPicker()+({
-    home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe
+    home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
@@ -366,7 +441,9 @@ function syncBackButton() {
   } catch {}
 }
 function goToTab(tab) {
-  if (tab==="wardrobe" && ui.tab!=="wardrobe") ui.returnTab = ui.tab;
+  if (["wardrobe","inventory"].includes(tab) && !["wardrobe","inventory"].includes(ui.tab)) {
+    ui.returnTab = ui.tab;
+  }
   ui.tab = tab;
   render();
   syncBackButton();
@@ -378,7 +455,7 @@ function closeModal() {
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
-  else if (ui.tab === "wardrobe") goToTab(ui.returnTab || "home");
+  else if (["wardrobe","inventory"].includes(ui.tab)) goToTab(ui.returnTab || "home");
   else if (ui.tab !== "home") goToTab("home");
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
@@ -451,6 +528,21 @@ document.addEventListener("click", async e=>{
   if (target.dataset.click==="picker") {ui.picker=!ui.picker;render();return;}
   if (target.dataset.click==="pet-greet") {petGreeting();return;}
   if (target.dataset.click==="wardrobe") {tap();goToTab("wardrobe");return;}
+  if (target.dataset.click==="inventory") {tap();goToTab("inventory");return;}
+  if (target.dataset.click==="inventory-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.craft) {
+    const recipe=ui.config.recipes.find(x=>x.code===target.dataset.craft);
+    if (recipe) {
+      const needed=recipe.ingredients.map(i=>{
+        const item=ui.config.materials.find(m=>m.code===i.code);
+        return (item?.icon||'📦')+' '+i.quantity;
+      }).join(", ");
+      confirmDialog('Создать '+recipe.name+'?',
+        'Будут потрачены общие материалы: '+needed+'. Сувенир один на двоих.',
+        ()=>perform("craft",recipe.code));
+    }
+    return;
+  }
   if (target.dataset.click==="refresh") {await refreshPet({force:true,quiet:false});return;}
   if(target.dataset.buy) {
     const item=ui.config.shop.find(i=>i.code===target.dataset.buy);

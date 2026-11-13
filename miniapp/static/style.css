@@ -138,3 +138,37 @@ button{font:inherit;cursor:pointer} button:disabled{cursor:not-allowed;opacity:.
   .effect-card { animation:none; }
   .effect-particle { display:none; }
 }
+
+
+/* PETS WORLD 1.3 — common backpack & collectible workshop */
+.backpack-link { background:linear-gradient(125deg,rgba(45,72,94,.8),rgba(46,36,94,.7)); }
+.backpack-link .h2 { margin:0; }
+.trophy-strip { display:flex;gap:7px;flex-wrap:wrap;margin-top:15px; }
+.route-loot-title { margin:17px 0 7px;color:#c7d5f9;font-size:12px;font-weight:700; }
+.route-loot { display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:12px;font-size:12px; }
+.route-loot .chip { white-space:normal; }
+.material-chip.common { color:#b2f3de; }
+.material-chip.uncommon { color:#a2bffb; }
+.material-chip.rare { color:#f7d58d; }
+.inventory-total { display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:linear-gradient(125deg,#23334a,#2b2450); }
+.inventory-total .title { font-size:23px; }
+.inventory-heading { margin:24px 3px 12px; }
+.resource-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px; }
+.resource-card { min-width:0;border-radius:19px;padding:18px 14px;min-height:155px;
+  border:1px solid #4a617b55;background:linear-gradient(155deg,#26334e,#1a243b); }
+.resource-card.uncommon { border-color:#819ced77;background:linear-gradient(135deg,#2b3b64,#21294d); }
+.resource-card.rare { border-color:#eed18a85;background:linear-gradient(135deg,#584365,#343152); }
+.resource-icon { font-size:31px;margin-bottom:12px; }
+.resource-title { font-size:14px;font-weight:800;letter-spacing:-.02em; }
+.resource-stock { font-size:22px;font-weight:800;color:#83edd6;line-height:1.5; }
+.resource-card.rare .resource-stock { color:#fce4a0; }
+.resource-card small { font-size:10px;color:#a9b6d4;line-height:1.35;display:block; }
+.recipe-card { margin:11px 0; }
+.recipe-costs { display:flex;gap:9px;flex-wrap:wrap;margin-top:13px; }
+.material-cost { font-size:12px;font-weight:800;padding:7px 10px;border-radius:9px;
+  background:#252f4d;border:1px solid #44547555; }
+.material-cost.enough { color:#81e7ca; }
+.material-cost.missing { color:#ffbaaa; }
+.craft-icon { font-size:29px;background:#3b3459; }
+@media(max-width:355px) { .inventory-total { align-items:flex-start;flex-direction:column; } }
