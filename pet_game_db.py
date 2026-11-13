@@ -118,6 +118,7 @@ class PetGameDatabase(PetBusinessDatabase):
                 "INSERT INTO bot_meta(key,value) VALUES('pets3_migrated','1')"
             )
         await self._migrate_business()
+        await self._migrate_seasons()
 
     @asynccontextmanager
     async def _game_transaction(self):
