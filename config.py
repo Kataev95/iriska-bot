@@ -290,6 +290,6 @@ def load_config() -> Config:
         pet_outage_grace_hours=_float_env("PET_OUTAGE_GRACE_HOURS", 6.0),
         miniapp_enabled=_bool_env("MINIAPP_ENABLED", False),
         miniapp_url=(os.getenv("MINIAPP_URL") or "").strip().rstrip("/"),
-        miniapp_port=_int_env("MINIAPP_PORT", 8080),
+        miniapp_port=_int_env("MINIAPP_PORT", _int_env("PORT", 8080)),
     )
 
