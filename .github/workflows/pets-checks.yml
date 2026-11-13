@@ -2,7 +2,7 @@ name: iriska bot tests
 
 on:
   push:
-    branches: [main, feature/pets-hud-mobile-navigation]
+    branches: [main, feature/pets-miniapp-v1]
   pull_request:
 
 jobs:
@@ -28,7 +28,8 @@ jobs:
           python test_pet_outage.py
           python test_pet_game.py
           python test_pet_event_atomic.py
-      - name: Native Rich Message smoke tests
+      - name: Rich UI and Mini App API tests
         run: |
           python test_rich_ui.py
           python test_pet_hud.py
+          python test_miniapp.py
