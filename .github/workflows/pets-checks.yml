@@ -1,0 +1,28 @@
+name: iriska bot tests
+
+on:
+  push:
+    branches: [main, feature/pets3-atomic-events-rich-hud]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m compileall -q .
+      - name: Database, game and Telegram handler tests
+        run: |
+          set -e
+          python test_logic.py
+          python test_pets.py
+          python test_pet_amnesty.py
+          python test_pet_outage.py
+          python test_pet_game.py
+          python test_pet_event_atomic.py
