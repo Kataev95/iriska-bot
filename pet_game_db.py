@@ -18,9 +18,10 @@ from pet_care import (
 from pet_game import DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS, legacy_xp, level_for
 from pet_inventory import MATERIALS, RECIPES, loot_for, loot_summary
 from pet_home import MAX_ROOM_LEVEL, ROOMS, room_effect, route_loot
+from pet_business_db import PetBusinessDatabase
 
 
-class PetGameDatabase:
+class PetGameDatabase(PetBusinessDatabase):
     async def _migrate_pet_game(self):
         db = self._require()
         cols = {
@@ -116,6 +117,7 @@ class PetGameDatabase:
             await db.execute(
                 "INSERT INTO bot_meta(key,value) VALUES('pets3_migrated','1')"
             )
+        await self._migrate_business()
 
     @asynccontextmanager
     async def _game_transaction(self):
