@@ -167,7 +167,8 @@ class PetMarketDatabase:
                         "own": int(r["seller_pet_id"]) == pet_id,
                         "can_buy": (
                             int(r["seller_pet_id"]) != pet_id
-                            and user_id not in (r["owner_a"],r["owner_b"])
+                            and not set((pet["user_a"],pet["user_b"]))
+                                .intersection((r["owner_a"],r["owner_b"]))
                         ),
                     }
                     for r in rows
@@ -281,8 +282,10 @@ class PetMarketDatabase:
             ).fetchone()
             if seller is None or seller["status"] != "active":
                 return "Питомец продавца больше недоступен"
-            if user_id in (seller["user_a"],seller["user_b"]):
-                return "Нельзя покупать товары питомца, которым вы владеете"
+            if set((buyer["user_a"],buyer["user_b"])).intersection(
+                (seller["user_a"],seller["user_b"])
+            ):
+                return "Нельзя торговать между питомцами с общими хозяевами"
             day = datetime.fromtimestamp(now, tz).date()
             day_start = datetime.combine(day, time_of_day.min, tzinfo=tz).timestamp()
             day_end = datetime.combine(

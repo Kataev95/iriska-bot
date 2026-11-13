@@ -158,14 +158,13 @@ class MarketGameTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.state(pet=4,user=201))
         self.assertIn("недоступен",await self.db.buy_market_listing(
             4,401,listing,NOW+1,TZ))
-        self.assertIn("владеете",await self.db.buy_market_listing(
+        self.assertIn("общими хозяевами",await self.db.buy_market_listing(
             3,101,listing,NOW+1,TZ))
-        self.assertIn("владеете",await self.db.buy_market_listing(
-            1,102,listing,NOW+1,TZ) if False else
-            await self.db.buy_market_listing(3,301,listing,NOW+1,TZ))
-        # user 301 is not a co-owner of seller pet; pet #3 itself shares
-        # owner 101, but this API deliberately checks the clicking user.
-        # No chat crossing is allowed.
+        self.assertIn("общими хозяевами",await self.db.buy_market_listing(
+            3,301,listing,NOW+1,TZ))
+        self.assertFalse((await self.state(3,301))["listings"][0]["can_buy"])
+        # Block overlapping pairs even if the person clicking is not an
+        # owner of the selling pet: otherwise same-owner pet farming is easy.
         self.assertEqual((await self.db.get_user(CHAT,101))["balance"],0)
         self.assertEqual(await self.leaf(),47)
 

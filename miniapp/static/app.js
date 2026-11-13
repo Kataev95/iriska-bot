@@ -494,7 +494,7 @@ async function refreshPet({force=false,quiet=true} = {}) {
   finally {ui.syncing = false;}
 }
 async function loadMarket({force=false,quiet=true}={}) {
-  if(!ui.selected || !TG?.initData || document.hidden || ui.marketLoading) return;
+  if(!ui.selected || !TG?.initData || document.hidden || (ui.marketLoading&&!force)) return;
   if(!force && ui.market && Date.now()-ui.marketFetchedAt<60000) return;
   const id=ui.selected, serial=++ui.marketRequest;
   ui.marketLoading=true;
