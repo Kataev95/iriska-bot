@@ -25,7 +25,9 @@ for (const event of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenCha
 syncSafeArea();
 
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
-             group: "food", busy: false, toastTimer: 0, picker: false };
+             group: "food", busy: false, syncing: false, lastSync: 0,
+             syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
+             returnTab: "home" };
 const tabs = [
   ["home","🏠","Главная"], ["trips","🧭","Походы"],
   ["tasks","📋","Задания"], ["shop","🛍","Магазин"],
@@ -36,9 +38,22 @@ const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
   "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
 }[c]));
 const value = n => Math.max(0, Math.round(Number(n || 0)));
-const stat = (icon,title,amount) => '<div class="stat"><span>'+icon+' '+title+'</span>'+
+const stat = (icon,title,amount) => '<div class="stat '+(value(amount)<30?'is-low':value(amount)<60?'is-medium':'')+'"><span>'+icon+' '+title+'</span>'+
   '<strong>'+value(amount)+'%</strong><div class="progress"><i style="width:'+Math.min(value(amount),100)+'%"></i></div></div>';
-function tap() { try { TG?.HapticFeedback?.impactOccurred("light"); } catch {} }
+const serverNow = () => (Date.now() + ui.clockDelta) / 1000;
+const syncClock = p => {if(Number.isFinite(Number(p.server_time))) ui.clockDelta = p.server_time*1000-Date.now();};
+function duration(seconds) {
+  const total = Math.max(0,Math.ceil(seconds/60));
+  if (total>=60) return Math.floor(total/60)+' ч '+(total%60)+' мин';
+  return Math.max(1,total)+' мин';
+}
+function haptic(type="light") {
+  try {
+    if(type==="success" || type==="error") TG?.HapticFeedback?.notificationOccurred(type);
+    else TG?.HapticFeedback?.impactOccurred(type);
+  } catch {}
+}
+function tap() { haptic("light"); }
 function showToast(text) {
   toast.textContent = String(text || "");
   toast.classList.add("visible");
@@ -47,16 +62,27 @@ function showToast(text) {
 }
 async function api(path, payload) {
   if (!TG?.initData) throw new Error("Открой игру через кнопку в Telegram.");
-  const result = await fetch(path, {
-    method: payload ? "POST" : "GET",
-    headers: {"X-Telegram-Init-Data": TG.initData, ...(payload ? {"Content-Type":"application/json"} : {})},
-    body: payload ? JSON.stringify(payload) : undefined,
-    cache:"no-store",
-  });
-  let data;
-  try { data = await result.json(); } catch { throw new Error("Ошибка сервера"); }
-  if (!result.ok) throw new Error(data.error || data.message || "Не удалось выполнить запрос");
-  return data;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const result = await fetch(path, {
+      method: payload ? "POST" : "GET",
+      headers: {"X-Telegram-Init-Data": TG.initData, ...(payload ? {"Content-Type":"application/json"} : {})},
+      body: payload ? JSON.stringify(payload) : undefined,
+      cache:"no-store", signal: controller.signal,
+    });
+    let data;
+    try { data = await result.json(); } catch { throw new Error("Некорректный ответ сервера"); }
+    if (!result.ok) throw new Error(data.error || data.message || "Не удалось выполнить запрос");
+    return data;
+  } catch (e) {
+    if (e.name==="AbortError") {
+      throw new Error(payload
+        ? "Сервер не ответил. Сначала обнови данные, прежде чем повторять покупку или действие."
+        : "Сервер не отвечает. Проверь интернет и повтори.");
+    }
+    throw e;
+  } finally {clearTimeout(timer);}
 }
 function renderPicker() {
   if (ui.pets.length < 2) return "";
@@ -68,9 +94,9 @@ function renderPicker() {
 }
 function hero(p) {
   const target = p.next_xp ?? p.xp;
-  const prior = 25*p.level*(p.level-1);
+  const prior = Number.isFinite(p.level_start_xp) ? p.level_start_xp : 25*p.level*(p.level-1);
   const progress = p.next_xp == null ? 100 :
-    Math.min(100,Math.max(0,Math.round((p.xp-prior)/(target-prior)*100)));
+    Math.min(100,Math.max(0,Math.round((p.xp-prior)/Math.max(1,target-prior)*100)));
   return '<div class="hero"><div class="hero-overlay">✨ Уровень '+p.level+' / 20</div>'+
     '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'"></div>'+
     '<div class="panel"><div class="eyebrow">МОЙ ПИТОМЕЦ</div>'+
@@ -78,13 +104,21 @@ function hero(p) {
     '<div class="subtitle">🤝 Вместе с '+safe(p.partner)+'</div></div>'+
     '<div class="chip chip-purple">🔥 '+p.streak+' дн.</div></div>'+
     '<div class="stat-grid">'+stat("🍖","Сытость",p.food)+stat("😊","Настроение",p.joy)+stat("⚡","Энергия",p.energy)+'</div>'+
-    '<div class="xp-line"><b>⭐ '+p.xp+' XP</b><div class="progress"><i style="width:'+progress+'%"></i></div>'+
-    '<small>'+(p.next_xp == null ? "MAX":p.next_xp+' XP')+'</small></div></div>';
+    '<div class="xp-line"><b>⭐ '+p.xp+' XP</b><div class="progress" role="progressbar" aria-label="Опыт текущего уровня" aria-valuenow="'+progress+'" aria-valuemin="0" aria-valuemax="100"><i style="width:'+progress+'%"></i></div>'+
+    '<small>'+(p.next_xp == null ? "MAX":p.next_xp+' XP')+'</small></div>'+
+    '<p class="mood-caption">'+safe(p.mood||"🐾 У питомца всё хорошо")+'</p></div>';
 }
 function home(p) {
-  const actions = ui.config.actions.map(action =>
-    '<button class="btn" data-action="care" data-code="'+safe(action.code)+'">'+safe(action.name)+'</button>'
-  ).join("");
+  const actions = ui.config.actions.map(action => {
+    const state = p.care_state?.[action.code] || {};
+    const wait = Math.max(0,(state.ready_at||0)-serverNow());
+    const blocked = Boolean(state.blocked_reason);
+    const disabled = blocked || wait>0;
+    const hint = wait>0 ? "через "+duration(wait) : (blocked ? "Недоступно" : "Можно сейчас");
+    return '<button class="btn care-button" data-action="care" data-code="'+safe(action.code)+'" '+
+      (disabled?'disabled ':'')+'title="'+safe(state.blocked_reason||hint)+'">'+
+      '<span>'+safe(action.name)+'</span><small>'+(disabled?safe(hint):'✓ Готово')+'</small></button>';
+  }).join("");
   return hero(p)+'<div class="panel"><div class="eyebrow">ЕЖЕДНЕВНЫЙ УХОД</div>'+
     '<h2 class="h2">Позаботьтесь о '+safe(p.name)+'</h2>'+
     '<div class="buttons">'+actions+'</div></div>'+
@@ -99,13 +133,13 @@ function home(p) {
 function trips(p) {
   if (p.trip) {
     const r = ui.config.routes.find(x => x.code === p.trip.route);
-    const left = Math.max(0,p.trip.finish_at-Date.now()/1000);
+    const left = Math.max(0,p.trip.finish_at-serverNow());
     const title = r ? r.name : "Экспедиция";
     const timeText = left ? Math.ceil(left/60)+' мин до возвращения' : 'Готово к получению';
     return '<div class="section-heading">🧭 Приключения</div><p class="section-lead">Каждый поход приносит опыт и ириски.</p>'+
       '<div class="panel"><div class="eyebrow">ТЕКУЩИЙ ПОХОД</div>'+
       '<div class="card-row"><div class="card-icon">🗺️</div><div class="card-text"><strong>'+safe(title)+'</strong>'+
-      '<small>⏳ '+timeText+'</small></div></div>'+
+      '<small data-trip-countdown>⏳ '+timeText+'</small></div></div>'+
       '<div class="route-info"><span class="chip">⭐ '+p.trip.xp+' XP</span><span class="chip">🍬 '+p.trip.coins+'</span></div>'+
       (left ? '<button class="btn btn-wide" data-click="refresh">🔄 Обновить</button>' :
         '<button class="btn btn-primary btn-wide" data-action="claim" data-trip="'+p.trip.id+'">🎁 Забрать награду</button>')+
@@ -113,19 +147,21 @@ function trips(p) {
   }
   return '<div class="section-heading">🧭 Приключения</div>'+
     '<p class="section-lead">Выбирай маршрут, собирай награды и повышай уровень питомца.</p>'+
+    '<div class="notice">🎟 Походов осталось сегодня: <b>'+value(p.trips_remaining ?? 3)+'/3</b></div>'+
     ui.config.routes.map(r => {
       const bonusXp = p.profession === "explorer" ? Math.floor(r.xp*1.2) : r.xp;
       const energy = r.energy-(p.profession==="artisan" ? 3:0);
       const coins = r.coins+(p.profession==="merchant" ? 1:0);
       const time = r.seconds<3600 ? r.seconds/60+' мин' : r.seconds/3600+' ч';
-      const locked = p.food<20 || p.energy<energy;
+      const limited = p.trips_remaining === 0;
+      const locked = limited || p.food<20 || p.energy<energy;
       return '<div class="panel route"><div class="card-row"><div class="card-icon">'+
         safe(r.name.split(" ")[0])+'</div><div class="card-text"><strong>'+
         safe(r.name)+'</strong><small>Приключение · '+time+'</small></div></div>'+
         '<div class="route-info"><span class="chip">⚡ '+energy+'</span>'+
         '<span class="chip">⭐ '+bonusXp+' XP</span><span class="chip">🍬 '+coins+'</span></div>'+
         '<button class="btn btn-primary" data-action="start" data-code="'+safe(r.code)+'" '+
-        (locked?'disabled':'')+'>'+(locked?'🔒 Мало энергии или еды':'🧭 Отправиться')+'</button></div>';
+        (locked?'disabled':'')+'>'+(limited?'🔒 Лимит походов на сегодня':locked?'🔒 Мало энергии или еды':'🧭 Отправиться')+'</button></div>';
     }).join("");
 }
 function tasks(p) {
@@ -137,7 +173,9 @@ function tasks(p) {
       safe(t.name)+'</strong><small>'+ (t.claimed?'Награда получена':t.done?'Готово к получению':'Ещё не выполнено')+
       '</small></div><div class="card-end">+'+t.xp+' XP</div></div></div>').join("")+
     (claimable?'<button class="btn btn-cyan btn-wide" data-action="daily">🎁 Забрать весь опыт</button>':
-    '<div class="notice">Новые задания будут доступны завтра.</div>');
+    '<div class="notice">'+(p.daily.every(t=>t.claimed)
+      ? "✅ Все награды получены. Новые задания будут завтра."
+      : "✨ Выполняй задания, чтобы получить опыт. Новые задания — завтра.")+'</div>');
 }
 function shop(p) {
   const groups = [["food","🍪 Еда"],["wear","🎀 Аксессуары"],["extras","🏠 Улучшения"]];
@@ -192,44 +230,134 @@ function render() {
   wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
   nav.classList.remove("hidden");
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
-    (ui.tab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
+    (ui.tab===id || ui.tab==='wardrobe'&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
   app.innerHTML=renderPicker()+({
     home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe
   }[ui.tab]||home)(p);
 }
-async function loadPet(id) {
-  ui.selected=id;
-  ui.pet=await api('/api/pet/'+id);
-  ui.picker=false;
+function setPet(snapshot) {
+  ui.pet = snapshot;
+  syncClock(snapshot);
+  ui.lastSync = Date.now();
   render();
+}
+
+// Prevent stale GET results replacing an action or a more recent pet selection.
+// A background GET is never allowed to overwrite the result of a POST.
+async function loadPet(id) {
+  if (ui.busy) {showToast("Сначала заверши текущее действие"); return;}
+  const serial = ++ui.syncSerial;
+  ui.syncing = true;
+  try {
+    const pet = await api('/api/pet/'+id);
+    if (serial !== ui.syncSerial) return;
+    ui.selected = id;
+    ui.picker = false;
+    setPet(pet);
+  } finally {ui.syncing = false;}
+}
+async function refreshPet({force=false,quiet=true} = {}) {
+  if (!ui.selected || !TG?.initData || ui.busy || ui.syncing || document.hidden ||
+      !modal.classList.contains("hidden")) return;
+  if (!force && Date.now()-ui.lastSync < 55000) return;
+  const id = ui.selected, serial = ++ui.syncSerial;
+  ui.syncing = true;
+  try {
+    const pet = await api('/api/pet/'+id);
+    if (serial === ui.syncSerial && ui.selected === id && !ui.busy) {
+      setPet(pet);
+    }
+  } catch(e) {if(!quiet) showToast(e.message);}
+  finally {ui.syncing = false;}
+}
+function syncBackButton() {
+  try {
+    if (ui.tab !== "home" || !modal.classList.contains("hidden")) TG?.BackButton?.show();
+    else TG?.BackButton?.hide();
+  } catch {}
+}
+function goToTab(tab) {
+  if (tab==="wardrobe" && ui.tab!=="wardrobe") ui.returnTab = ui.tab;
+  ui.tab = tab;
+  render();
+  syncBackButton();
+  window.scrollTo(0,0);
+}
+function closeModal() {
+  modal.classList.add("hidden");
+  syncBackButton();
+}
+function goBack() {
+  if (!modal.classList.contains("hidden")) closeModal();
+  else if (ui.tab === "wardrobe") goToTab(ui.returnTab || "home");
+  else if (ui.tab !== "home") goToTab("home");
+}
+try {TG?.BackButton?.onClick(goBack);} catch {}
+document.addEventListener("keydown", e => {if(e.key === "Escape") goBack();});
+function syncTimers() {
+  if (!ui.pet || ui.busy) return;
+  if (ui.tab === "trips" && ui.pet.trip) {
+    const remaining = Math.max(0, ui.pet.trip.finish_at - serverNow());
+    const label = app.querySelector("[data-trip-countdown]");
+    if (label) {
+      label.textContent = remaining ? "⏳ "+duration(remaining)+" до возвращения" : "🎁 Поход завершён";
+      if (remaining===0 && app.querySelector('[data-click="refresh"]')) render();
+    }
+  }
+  if (ui.tab === "home") {
+    for (const btn of app.querySelectorAll('[data-action="care"]')) {
+      const info = ui.pet.care_state?.[btn.dataset.code];
+      if (!info) continue;
+      const remaining = Math.max(0, (info.ready_at||0) - serverNow());
+      const disabled = remaining>0 || Boolean(info.blocked_reason);
+      btn.disabled = disabled;
+      const hint = btn.querySelector("small");
+      if (hint) hint.textContent = remaining>0 ? "через "+duration(remaining)
+        : info.blocked_reason ? "Недоступно" : "✓ Готово";
+      btn.title = info.blocked_reason || (remaining>0 ? "Повтори позже" : "Можно сейчас");
+    }
+  }
 }
 function confirmDialog(title, info, handler) {
   modal.innerHTML='<div class="modal"><h3>'+safe(title)+'</h3><p>'+safe(info)+'</p>'+
     '<div class="modal-buttons"><button class="btn btn-quiet" id="cancel">Отмена</button>'+
     '<button class="btn btn-cyan" id="confirm">Подтвердить</button></div></div>';
   modal.classList.remove("hidden");
-  modal.querySelector("#cancel").addEventListener("click", ()=>modal.classList.add("hidden"));
+  syncBackButton();
+  modal.querySelector("#cancel").addEventListener("click", closeModal);
   modal.querySelector("#confirm").addEventListener("click", async ()=>{
-    modal.classList.add("hidden"); await handler();
+    closeModal(); await handler();
   });
 }
 async function perform(kind, code="", extra={}) {
   if (ui.busy) return;
-  ui.busy=true;tap();
+  const id = ui.selected;
+  ui.busy = true;
+  // Invalidate a pending background GET before making changes.
+  ++ui.syncSerial;
+  app.classList.add("is-busy");
+  tap();
   try {
-    const result=await api('/api/action',{pet_id:ui.selected,kind,code,...extra});
-    ui.pet=result.pet;render();showToast(result.message);
-  } catch(e) { showToast(e.message); }
-  finally {ui.busy=false;}
+    const result = await api('/api/action', {pet_id:id,kind,code,...extra});
+    if (ui.selected === id) setPet(result.pet);
+    showToast(result.message);
+    if (result.message.startsWith("✅") || result.message.startsWith("💕")) haptic("success");
+  } catch(e) {
+    haptic("error");
+    showToast(e.message);
+  } finally {
+    ui.busy = false;
+    app.classList.remove("is-busy");
+  }
 }
 document.addEventListener("click", async e=>{
   const target=e.target.closest("button");if(!target) return;
-  if (target.dataset.tab) {ui.tab=target.dataset.tab;tap();render();window.scrollTo(0,0);return;}
+  if (target.dataset.tab) {tap();goToTab(target.dataset.tab);return;}
   if (target.dataset.group) {ui.group=target.dataset.group;tap();render();return;}
   if (target.dataset.pet) {try{await loadPet(Number(target.dataset.pet));}catch(err){showToast(err.message);}return;}
   if (target.dataset.click==="picker") {ui.picker=!ui.picker;render();return;}
-  if (target.dataset.click==="wardrobe") {ui.tab="wardrobe";render();return;}
-  if (target.dataset.click==="refresh") {try{await loadPet(ui.selected);}catch(err){showToast(err.message);}return;}
+  if (target.dataset.click==="wardrobe") {tap();goToTab("wardrobe");return;}
+  if (target.dataset.click==="refresh") {await refreshPet({force:true,quiet:false});return;}
   if(target.dataset.buy) {
     const item=ui.config.shop.find(i=>i.code===target.dataset.buy);
     if(item)confirmDialog('Купить '+item.name+'?','С баланса спишется '+item.price+' 🍬. '+item.info,
@@ -273,5 +401,15 @@ async function boot() {
     document.querySelector("#retry")?.addEventListener("click", boot);
   }
 }
-setInterval(()=>{if(ui.tab==="trips"&&ui.pet?.trip&&!ui.busy)render();},30000);
+// Refresh shared pet state when returning from another Telegram tab / chat.
+try { TG?.onEvent?.("activated", () => refreshPet({force:true})); } catch {}
+document.addEventListener("visibilitychange", () => {
+  if(!document.hidden) refreshPet();
+});
+window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
+window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
+setInterval(() => {
+  syncTimers();
+  refreshPet();
+}, 15000);
 boot();

@@ -15,8 +15,9 @@ from pathlib import Path
 from aiohttp import web
 
 from miniapp.auth import Unauthorized, validate_init_data
-from pet_care import ACTIONS, SHOP, SHOP_BY_CODE, image_key, parse_set
-from pet_game import PROFESSIONS, ROUTES, TASKS, growth_days, level_for, next_level_xp
+from pet_care import ACTIONS, SHOP, SHOP_BY_CODE, check_action, image_key, mood_text, parse_set
+from pet_game import (DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS,
+                      growth_days, level_for, next_level_xp, xp_for_level)
 from pets import species_by_code
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,38 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
     current_xp = int(pet["xp"])
     next_xp = next_level_xp(current_xp)
     job = PROFESSIONS.get(pet["profession"])
+    hour = datetime.fromtimestamp(now, cfg.tz).hour
+
+    # Server-authoritative cooldowns and daily trip quota, not game rules
+    # guessed from JavaScript. These are read-only; enforcement still happens
+    # inside the existing atomic game_care / start_trip database methods.
+    action_rows = await (
+        await db._require().execute(
+            "SELECT action, ts FROM pet_actions WHERE pet_id=? AND user_id=?",
+            (pet_id, user_id),
+        )
+    ).fetchall()
+    last_actions = {row["action"]: float(row["ts"]) for row in action_rows}
+    care_state = {
+        code: {
+            "ready_at": max(0.0, last_actions.get(code, 0) + action.cooldown)
+            if code in last_actions else 0.0,
+            "blocked_reason": (
+                "Сначала дождитесь вылупления питомца"
+                if not int(pet["best_streak"]) else
+                check_action(code, pet["food"], pet["joy"], pet["energy"], hour)
+            ),
+        }
+        for code, action in ACTIONS.items()
+    }
+    trip_count = (
+        await (
+            await db._require().execute(
+                "SELECT COUNT(*) FROM pet_trips WHERE user_id=? AND day=?",
+                (user_id, day),
+            )
+        ).fetchone()
+    )[0]
     current_image = image_key(
         pet["species"], growth_days(pet), int(pet["best_streak"]),
         float(pet["food"]), float(pet["joy"]), float(pet["energy"]),
@@ -106,7 +139,13 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "species": pet["species"], "stage_days": growth_days(pet),
         "image": f"/assets/pets/{current_image}.jpg",
         "partner": partner_name,
-        "xp": current_xp, "level": level_for(current_xp), "next_xp": next_xp,
+        "xp": current_xp, "level": level_for(current_xp),
+        "level_start_xp": xp_for_level(level_for(current_xp)),
+        "next_xp": next_xp,
+        "server_time": now,
+        "mood": mood_text(pet["food"], pet["joy"], pet["energy"], hour),
+        "care_state": care_state,
+        "trips_remaining": max(0, DAILY_START_LIMIT - int(trip_count)),
         "profession": pet["profession"] or "", "profession_title": job[0] if job else "",
         "streak": int(pet["streak"]), "best_streak": int(pet["best_streak"]),
         "food": round(float(pet["food"])), "joy": round(float(pet["joy"])),
