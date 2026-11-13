@@ -165,6 +165,25 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect(message, "care");
     return;
   }
+  if (kind==="business_build" &&
+      (after.businesses?.units?.[code]?.level||0)>(before.businesses?.units?.[code]?.level||0)) {
+    playEffect("🏪 Предприятие улучшено!", "level");
+    return;
+  }
+  if (kind==="business_start" && !before.businesses?.units?.[code]?.job &&
+      after.businesses?.units?.[code]?.job) {
+    playEffect("⚙️ Производство запущено", "care");
+    return;
+  }
+  if (kind==="business_collect" &&
+      (after.businesses?.units?.[code]?.stock||0)>(before.businesses?.units?.[code]?.stock||0)) {
+    playEffect("📦 Товары на складе!", "reward");
+    return;
+  }
+  if (kind==="business_sell" && after.balance>before.balance) {
+    playEffect("🍬 +"+(after.balance-before.balance)+" ирисок!", "reward");
+    return;
+  }
   let success = false;
   if (kind === "claim") {
     success = Boolean(before.trip && !after.trip);
@@ -236,6 +255,10 @@ function home(p) {
       ? 'Улучшено '+Object.values(p.house_rooms||{}).reduce((sum,n)=>sum+n,0)+' / 6 уровней комнат'
       : 'Постройте свой уютный домик')+'</p></div>'+
     '<button class="btn btn-primary" data-click="house">Открыть →</button></div></div>'+
+    '<div class="panel business-link"><div class="row"><div><div class="h2">🏪 Семейные бизнесы</div>'+
+    '<p class="subtitle">'+(p.businesses?.starts_remaining ?? 4)+' производства осталось сегодня · '+
+    '🍬 '+(p.businesses?.sales_coins_remaining ?? 12)+' к продаже</p></div>'+
+    '<button class="btn btn-primary" data-click="business">Открыть →</button></div></div>'+
     '<div class="panel backpack-link"><div class="row"><div><div class="h2">🎒 Общий рюкзак</div>'+
     '<p class="subtitle">'+(p.crafts||[]).length+' сувениров · '+
     ui.config.materials.reduce((sum,m)=>sum+resourceQuantity(p,m.code),0)+' материалов</p></div>'+
@@ -346,7 +369,8 @@ function growth(p) {
         '<button class="btn btn-primary" data-profession="'+safe(job.code)+'">Выбрать</button></div>').join("")
     )+'</div><button class="btn btn-wide" data-click="wardrobe">🎀 Гардероб →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="house">🏡 Мой дом →</button>';
+    '<button class="btn btn-quiet btn-wide" data-click="house">🏡 Мой дом →</button>'+
+    '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Бизнесы и производство →</button>';
 }
 function inventory(p) {
   const stock = p.materials || {};
@@ -389,6 +413,7 @@ function inventory(p) {
     '<h2 class="h2 inventory-heading">🛠 Мастерская</h2>'+
     '<p class="section-lead">Создавайте коллекционные сувениры из найденных вещей. '+
       'Пока они не дают бонусов к XP или ирискам.</p>'+recipes+
+    '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Предприятия и товары →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="inventory-back">← Назад</button>';
 }
 
@@ -412,10 +437,11 @@ function render() {
   wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
   nav.classList.remove("hidden");
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
-    (ui.tab===id || ['wardrobe','inventory','house'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
+    (ui.tab===id || ['wardrobe','inventory','house','business'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
   app.innerHTML=renderPicker()+({
     home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory,
-    house: p => window.PetsHouse.renderHouse(p,ui.config)
+    house: p => window.PetsHouse.renderHouse(p,ui.config),
+    business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow())
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
@@ -460,7 +486,7 @@ function syncBackButton() {
   } catch {}
 }
 function goToTab(tab) {
-  if (["wardrobe","inventory","house"].includes(tab) && !["wardrobe","inventory","house"].includes(ui.tab)) {
+  if (["wardrobe","inventory","house","business"].includes(tab) && !["wardrobe","inventory","house","business"].includes(ui.tab)) {
     ui.returnTab = ui.tab;
   }
   ui.tab = tab;
@@ -474,13 +500,27 @@ function closeModal() {
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
-  else if (["wardrobe","inventory","house"].includes(ui.tab)) goToTab(ui.returnTab || "home");
+  else if (["wardrobe","inventory","house","business"].includes(ui.tab)) goToTab(ui.returnTab || "home");
   else if (ui.tab !== "home") goToTab("home");
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
 document.addEventListener("keydown", e => {if(e.key === "Escape") goBack();});
 function syncTimers() {
   if (!ui.pet || ui.busy) return;
+  if(ui.tab==="business") {
+    for(const label of app.querySelectorAll("[data-business-countdown]")) {
+      const code=label.dataset.businessCountdown;
+      const job=ui.pet.businesses?.units?.[code]?.job;
+      if(!job) continue;
+      const remaining=Math.max(0,job.finish_at-serverNow());
+      label.textContent=remaining>0?"⏳ Осталось "+duration(remaining):"✅ Товары готовы!";
+      const button=app.querySelector('[data-business-collect="'+code+'"]');
+      if(button) {
+        button.disabled=remaining>0;
+        button.textContent=remaining>0?"⏳ Производится":"📦 Забрать готовую партию";
+      }
+    }
+  }
   if (ui.tab === "trips" && ui.pet.trip) {
     const remaining = Math.max(0, ui.pet.trip.finish_at - serverNow());
     const label = app.querySelector("[data-trip-countdown]");
@@ -549,6 +589,53 @@ document.addEventListener("click", async e=>{
   if (target.dataset.click==="wardrobe") {tap();goToTab("wardrobe");return;}
   if (target.dataset.click==="house") {tap();goToTab("house");return;}
   if (target.dataset.click==="house-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.click==="business") {tap();goToTab("business");return;}
+  if (target.dataset.click==="business-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.businessBuild) {
+    const unit=ui.config.businesses.find(b=>b.code===target.dataset.businessBuild);
+    if(unit) {
+      const level=Number(ui.pet.businesses?.units?.[unit.code]?.level||0);
+      const tier=unit.tiers[level];
+      if(tier) {
+        const cost=tier.costs.map(item=>{
+          const m=ui.config.materials.find(x=>x.code===item.code);
+          return (m?.icon||"📦")+" "+item.quantity;
+        }).join(", ");
+        confirmDialog(level===0?"Построить "+unit.name+"?":"Улучшить "+unit.name+"?",
+          "Будут списаны общие ресурсы: "+cost+". Ириски не тратятся.",
+          ()=>perform("business_build",unit.code,{expected_level:level}));
+      }
+    }
+    return;
+  }
+  if (target.dataset.businessStart) {
+    const unit=ui.config.businesses.find(b=>b.code===target.dataset.businessStart);
+    if(unit) {
+      const cost=unit.inputs.map(item=>{
+        const m=ui.config.materials.find(x=>x.code===item.code);
+        return (m?.icon||"📦")+" "+item.quantity;
+      }).join(", ");
+      confirmDialog("Запустить производство?",
+        "Ресурсы с общего склада: "+cost+". Товары можно забрать через "+
+        duration(unit.production_seconds)+".",
+        ()=>perform("business_start",unit.code));
+    }
+    return;
+  }
+  if (target.dataset.businessCollect) {
+    const code=target.dataset.businessCollect;
+    const job=Number(target.dataset.jobId);
+    if(Number.isSafeInteger(job)&&job>0) await perform("business_collect",code,{job_id:job});
+    return;
+  }
+  if (target.dataset.businessSell) {
+    const unit=ui.config.businesses.find(b=>b.code===target.dataset.businessSell);
+    if(unit) confirmDialog("Продать товары?",
+      "Сервер продаст максимум из доступных товаров в пределах дневного лимита. "+
+      "Ириски начисляются лично тому, кто продаёт, без вывода из бота.",
+      ()=>perform("business_sell",unit.code));
+    return;
+  }
   if (target.dataset.buildRoom) {
     const room=ui.config.house_rooms.find(r=>r.code===target.dataset.buildRoom);
     if (room) {

@@ -1,0 +1,40 @@
+/* PETS WORLD 1.5 — playful but lightweight micro-economy */
+.business-hero{isolation:isolate;position:relative;height:180px;border-radius:27px;display:flex;
+ justify-content:space-evenly;align-items:center;overflow:hidden;margin-bottom:13px;
+ background:linear-gradient(170deg,#30345b,#4b517f 53%,#468a78 74%,#2b6356 75%);
+ border:1px solid #9cbad45b;box-shadow:inset 0 5px 25px #fff1,0 12px 25px #080d2366;}
+.business-hero>span{font-size:63px;z-index:1;line-height:1;filter:drop-shadow(0 10px 9px #131b3188);}
+.business-hero>span:nth-child(2){font-size:86px;}
+.business-ground{position:absolute;bottom:2px;left:0;right:0;text-align:center;font-size:22px;
+ z-index:2;letter-spacing:15px;white-space:nowrap;}
+.business-limit{background:linear-gradient(125deg,#2d3359,#1d3e4d);}
+.business-limit-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin:13px 0;}
+.business-limit-grid>div{border-radius:15px;background:#141e34a9;padding:12px 10px;min-width:0;}
+.business-limit-grid strong{display:block;font-size:18px;color:#8ce9df;}
+.business-limit-grid small{font-size:11px;color:#b2c3db;line-height:1.6;}
+.business-card{margin:13px 0;background:linear-gradient(145deg,#232d4e,#1c283d);}
+.business-icon{display:grid;place-items:center;font-size:32px;flex-shrink:0;width:54px;height:54px;
+ border-radius:18px;background:linear-gradient(150deg,#374479,#423357);}
+.business-level{border-radius:9px;padding:7px 8px;color:#9ae5cf;background:#253f44;
+ font-size:10px;font-weight:800;white-space:nowrap;}
+.business-tiers{display:flex;gap:8px;margin:16px 0;}
+.business-tiers i{height:7px;border-radius:20px;background:#3b465c;flex:1;}
+.business-tiers i.on{background:linear-gradient(90deg,#54d4d4,#87eabb);}
+.business-bonus{font-size:12px;color:#dce6fe;margin:10px 0;}
+.business-work{padding:4px 0 9px;}
+.business-job{display:flex;align-items:center;gap:11px;margin:12px 0;border-radius:15px;
+ background:#35466a55;padding:14px;}
+.business-pulse{font-size:31px;flex-shrink:0;}
+.business-job strong,.business-input strong,.business-warehouse strong{display:block;font-size:13px;}
+.business-job small,.business-warehouse small{display:block;font-size:11px;color:#afc6de;margin-top:5px;}
+.business-input{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:space-between;
+ font-size:11px;margin:13px 0 5px;}
+.business-input span{color:#c6d4eb;}
+.business-warehouse{display:flex;align-items:center;justify-content:space-between;gap:12px;
+ padding:12px 4px;border-top:1px solid #ffffff16;margin-top:18px;}
+.business-done{padding:12px 4px;color:#8af0c0;font-size:12px;text-align:center;font-weight:800;}
+@media(max-width:390px){.business-hero>span{font-size:48px;}
+ .business-hero>span:nth-child(2){font-size:76px;}
+ .business-ground{letter-spacing:9px;}
+ .business-icon{width:45px;height:45px;font-size:26px;}}
+@media(prefers-reduced-motion:reduce){.business-hero *{animation:none;}}

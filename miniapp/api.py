@@ -20,6 +20,7 @@ from pet_game import (DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS,
                       growth_days, level_for, next_level_xp, xp_for_level)
 from pet_inventory import MATERIALS, RECIPES, loot_for
 from pet_home import ROOMS, room_effect, route_loot
+from pet_business import BUSINESSES, DAILY_PRODUCTION_STARTS, DAILY_SALE_COIN_LIMIT
 from pets import species_by_code
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
     next_xp = next_level_xp(current_xp)
     materials, crafts = await db.inventory_state(pet_id)
     rooms, room_used = await db.home_state(pet_id, day)
+    businesses = await db.business_state(pet_id, day)
     workshop_level = rooms["workshop"] if pet["house"] else 0
     job = PROFESSIONS.get(pet["profession"])
     hour = datetime.fromtimestamp(now, cfg.tz).hour
@@ -158,6 +160,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "freezes": int(pet["freezes"]), "balance": int(user["balance"]) if user else 0,
         "items": parse_set(pet["items"]), "worn": parse_set(pet["worn"]),
         "materials": materials, "crafts": crafts,
+        "businesses": businesses,
         "house_rooms": rooms if pet["house"] else {code: 0 for code in ROOMS},
         "house_used": room_used if pet["house"] else [],
         "house_route_loot": {
@@ -229,6 +232,27 @@ async def bootstrap(request: web.Request):
              ]}
             for code, room in ROOMS.items()
         ],
+        "businesses": [
+            {"code": code, "name": unit.title, "icon": unit.icon,
+             "description": unit.description, "good": unit.good,
+             "good_title": unit.good_title, "good_icon": unit.good_icon,
+             "sell_price": unit.sell_price,
+             "production_seconds": unit.production_seconds,
+             "outputs": list(unit.outputs),
+             "inputs": [{"code": mat, "quantity": quantity}
+                        for mat, quantity in unit.input_materials],
+             "tiers": [
+                 {"level": level+1,
+                  "costs": [{"code": mat, "quantity": quantity}
+                            for mat, quantity in requirements]}
+                 for level, requirements in enumerate(unit.upgrades)
+             ]}
+            for code, unit in BUSINESSES.items()
+        ],
+        "business_limits": {
+            "production_starts": DAILY_PRODUCTION_STARTS,
+            "sales_coins": DAILY_SALE_COIN_LIMIT,
+        },
     })
 
 
@@ -275,6 +299,18 @@ async def action(request: web.Request):
         result = await db.build_room(pet_id, uid, code, now, int(payload["expected_level"]))
     elif kind == "room_use" and room_effect(code, 1):
         result = await db.use_room(pet_id, uid, code, now, cfg.tz)
+    elif kind == "business_build" and code in BUSINESSES:
+        result = await db.build_business(
+            pet_id, uid, code, now, int(payload["expected_level"])
+        )
+    elif kind == "business_start" and code in BUSINESSES:
+        result = await db.start_business_job(pet_id, uid, code, now, cfg.tz)
+    elif kind == "business_collect" and code in BUSINESSES:
+        result = await db.collect_business_job(
+            pet_id, uid, code, int(payload["job_id"]), now
+        )
+    elif kind == "business_sell" and code in BUSINESSES:
+        result = await db.sell_business_goods(pet_id, uid, code, now, cfg.tz)
     else:
         raise ValueError("Unknown action")
     # Do not trust optimistic client state; return the durable DB snapshot.

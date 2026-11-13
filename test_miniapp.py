@@ -323,6 +323,73 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
                 "kind":"room_use","code":"bedroom"})
         self.assertEqual(no_auth.status,401)
 
+    async def test_business_authorization_production_and_sale(self):
+        bootstrap=await self.client.get("/api/bootstrap",headers=self.headers)
+        self.assertEqual(bootstrap.status,200)
+        defs=await bootstrap.json()
+        self.assertEqual(len(defs["businesses"]),2)
+        self.assertEqual(defs["business_limits"]["sales_coins"],12)
+        self.assertEqual(defs["business_limits"]["production_starts"],4)
+        self.assertEqual((await self.client.get("/api/pet/1",
+                headers=self.headers)).status,200)
+        await self.db._require().executemany(
+            "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
+            [(1,"wood",30),(1,"leaf",30),(1,"stone",10)]
+        )
+        await self.db._require().commit()
+        request={"pet_id":1,"kind":"business_build","code":"florist",
+                 "expected_level":0,"user_id":201,
+                 "materials":{"leaf":100000},"price":0}
+        denied=await self.client.post("/api/action",
+            headers={"X-Telegram-Init-Data":signed(201)},json=request)
+        self.assertEqual(denied.status,403)
+        r=await self.client.post("/api/action",headers=self.headers,json=request)
+        self.assertEqual(r.status,200)
+        self.assertEqual((await r.json())["pet"]["businesses"]["units"]["florist"]["level"],1)
+        r=await self.client.post("/api/action",headers=self.headers,json=request)
+        self.assertIn("изменился",(await r.json())["message"])
+        self.assertEqual((await self.db.inventory_state(1))[0]["leaf"],24)
+        started=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"business_start","code":"florist",
+                  "production_seconds":0, "quantity":100000})
+        startdata=await started.json()
+        self.assertEqual(started.status,200)
+        self.assertEqual(startdata["pet"]["businesses"]["units"]["florist"]["job"]["quantity"],2)
+        batch=startdata["pet"]["businesses"]["units"]["florist"]["job"]
+        too_early=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"business_collect","code":"florist",
+                  "job_id":batch["id"]})
+        self.assertIn("ещё",(await too_early.json())["message"])
+        await self.db._require().execute(
+            "UPDATE pet_business_jobs SET finish_at=? WHERE id=?",
+            (time.time()-1,batch["id"]))
+        await self.db._require().commit()
+        claimed=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"business_collect","code":"florist",
+                  "job_id":batch["id"],"quantity":9000})
+        claimdata=await claimed.json()
+        self.assertEqual(claimdata["pet"]["businesses"]["units"]["florist"]["stock"],2)
+        repeated=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"business_collect","code":"florist",
+                  "job_id":batch["id"]})
+        self.assertIn("уже",(await repeated.json())["message"])
+        sold=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"business_sell","code":"florist",
+                  "quantity":123456, "coins":900000})
+        sale=await sold.json()
+        self.assertEqual(sale["pet"]["balance"],24)
+        self.assertEqual(sale["pet"]["businesses"]["units"]["florist"]["stock"],0)
+        self.assertEqual(sale["pet"]["businesses"]["sales_coins_remaining"],8)
+        another=await self.client.get("/api/pet/1",
+                    headers={"X-Telegram-Init-Data":signed(102)})
+        self.assertEqual((await another.json())["businesses"]["units"]["florist"]["stock"],0)
+        invalid=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"business_sell","code":"__internal__"})
+        self.assertEqual(invalid.status,400)
+        unauth=await self.client.post("/api/action",
+            json={"pet_id":1,"kind":"business_sell","code":"florist"})
+        self.assertEqual(unauth.status,401)
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -362,7 +429,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=5", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=6", html)
+        self.assertIn("/static/app.js?v=7", html)
+        self.assertIn("/static/business.css?v=1", html)
+        self.assertIn("/static/business.js?v=1", html)
 
 
 class MiniAppFeedbackTests(unittest.TestCase):
@@ -393,6 +462,9 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('data-click="house"', js)
         self.assertIn('data-build-room=', (static/"house.js").read_text(encoding="utf-8"))
         self.assertIn('house-scene', (static/"house.css").read_text(encoding="utf-8"))
+        self.assertIn('window.PetsBusiness.renderBusiness', js)
+        self.assertIn('data-business-build=', (static/"business.js").read_text(encoding="utf-8"))
+        self.assertIn('business-hero', (static/"business.css").read_text(encoding="utf-8"))
 
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
@@ -401,7 +473,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("app.js", "house.js"):
+        for name in ("app.js", "house.js", "business.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
