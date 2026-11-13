@@ -233,7 +233,10 @@ def rich_pet_html(pet, names: dict, config: Config, note: str | None = None) -> 
 
     best, streak = int(pet["best_streak"]), int(pet["streak"])
     today = local_now(config).strftime("%Y-%m-%d")
-    doc = [f"<h2>🐾 {pet_title(pet)}</h2>"]
+    doc = [
+        f"<h2>🐾 {pet_title(pet)}</h2>",
+        f"<p>👫 {_plain(names, pet['user_a'])} и {_plain(names, pet['user_b'])}</p>",
+    ]
     if best <= 0:
         doc.append("<p>🥚 Яйцо ждёт переписки двух хозяев.</p>")
     else:
@@ -534,7 +537,9 @@ def shop_category_keyboard(pet, group: str) -> InlineKeyboardMarkup:
         )
         for item in items
     ]
-    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    # A single button per line avoids cramming long upgrade names on phones.
+    step = 1 if group == "upgrade" else 2
+    rows = [buttons[i:i + step] for i in range(0, len(buttons), step)]
     rows.append([
         InlineKeyboardButton(text="⬅️ Категории", callback_data=_cb("shop", pid)),
         InlineKeyboardButton(text="🐾 Питомец", callback_data=_cb("main", pid)),
