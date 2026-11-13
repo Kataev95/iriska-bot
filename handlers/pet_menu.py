@@ -796,7 +796,7 @@ async def on_event(callback: CallbackQuery, db: Database, config: Config) -> Non
         )
         return
     if status in ("gone", "again", "invalid"):
-        await callback.answer("Уже нажато 🙂" if status == "again" else "Событие закончено")
+        await callback.answer("Уже нажато 🙂" if status == "again" else "Событие закончилось")
         return
     names = await _names(db, pet)
     who = _who(names, user.id)
