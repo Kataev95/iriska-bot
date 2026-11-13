@@ -155,5 +155,27 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status, 400)
 
 
+
+class MiniAppFullscreenLayoutTests(unittest.TestCase):
+    """Protect against Telegram native header overlapping the PETS logo."""
+
+    def test_safe_area_insets_and_cache_versions(self):
+        from pathlib import Path
+
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        css = (static / "style.css").read_text(encoding="utf-8")
+        js = (static / "app.js").read_text(encoding="utf-8")
+        html = (static / "index.html").read_text(encoding="utf-8")
+        self.assertIn("--tg-safe-area-inset-top", css)
+        self.assertIn("--tg-content-safe-area-inset-top", css)
+        self.assertIn("--pets-top-offset", css)
+        self.assertIn("padding:calc(var(--pets-top-offset)", css)
+        self.assertIn("contentSafeAreaChanged", js)
+        self.assertIn("safeAreaChanged", js)
+        self.assertIn("syncSafeArea()", js)
+        self.assertIn("/static/style.css?v=2", html)
+        self.assertIn("/static/app.js?v=2", html)
+
+
 if __name__ == "__main__":
     unittest.main()

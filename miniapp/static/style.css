@@ -2,11 +2,22 @@
   color-scheme: dark;
   --bg:#0c1020; --pane:rgba(28,34,57,.84); --pane-solid:#1d243b; --border:rgba(164,179,220,.12);
   --text:#f6f7ff; --muted:#9aa5c5; --cyan:#68e5df; --gold:#ffdd90; --purple:#9579fc;
+  /* In Fullscreen Telegram draws Close / Collapse above the web content.
+     Two independent insets are required: Android status bar + Telegram header.
+     JS refreshes these variables as the Telegram viewport changes. */
+  --pets-sdk-safe-top:var(--tg-safe-area-inset-top, 0px);
+  --pets-sdk-safe-bottom:var(--tg-safe-area-inset-bottom, 0px);
+  --pets-sdk-content-top:var(--tg-content-safe-area-inset-top, 0px);
+  --pets-sdk-content-bottom:var(--tg-content-safe-area-inset-bottom, 0px);
+  --pets-safe-top:max(env(safe-area-inset-top, 0px), var(--pets-sdk-safe-top));
+  --pets-safe-bottom:max(env(safe-area-inset-bottom, 0px), var(--pets-sdk-safe-bottom));
+  --pets-top-offset:calc(var(--pets-safe-top) + var(--pets-sdk-content-top));
+  --pets-bottom-offset:calc(var(--pets-safe-bottom) + var(--pets-sdk-content-bottom));
 }
 * {box-sizing:border-box} html,body{padding:0;margin:0;min-height:100%;background:var(--bg);color:var(--text)}
 body{font-family:'Manrope',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
 button{font:inherit;cursor:pointer} button:disabled{cursor:not-allowed;opacity:.48}
-#shell{max-width:520px;margin:auto;position:relative;min-height:100dvh;padding:env(safe-area-inset-top) 16px calc(101px + env(safe-area-inset-bottom));overflow:hidden}
+#shell{max-width:520px;margin:auto;position:relative;min-height:100dvh;padding:calc(var(--pets-top-offset) + 12px) 16px calc(101px + var(--pets-bottom-offset));overflow:hidden}
 .ambient{position:absolute;border-radius:50%;pointer-events:none;filter:blur(80px);opacity:.28}
 .ambient-a{width:310px;height:270px;background:#6956e3;top:-150px;right:-150px}
 .ambient-b{width:280px;height:260px;background:#07a5a3;top:260px;left:-215px}
@@ -50,14 +61,14 @@ button{font:inherit;cursor:pointer} button:disabled{cursor:not-allowed;opacity:.
 .tabs{display:flex;gap:8px;overflow-x:auto;padding:8px 0 7px;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}
 .pill{white-space:nowrap;padding:9px 15px;border:1px solid var(--border);background:var(--pane);color:var(--muted);border-radius:100px;font-size:12px;font-weight:800}
 .pill.active{background:var(--purple);color:#fff;border-color:#aa95ff}
-.bottom-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(520px,100%);height:calc(78px + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:start;padding:10px 8px env(safe-area-inset-bottom);background:#151b30ee;border-top:1px solid #42507144;box-shadow:0 -15px 40px #080b1b90;backdrop-filter:blur(22px);z-index:6}
+.bottom-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(520px,100%);height:calc(78px + var(--pets-bottom-offset));display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:start;padding:10px 8px var(--pets-bottom-offset);background:#151b30ee;border-top:1px solid #42507144;box-shadow:0 -15px 40px #080b1b90;backdrop-filter:blur(22px);z-index:6}
 .nav-btn{display:flex;flex-direction:column;align-items:center;gap:4px;background:transparent;border:0;border-radius:12px;padding:6px 0;color:#9da8c8;font-size:10px;font-weight:800}
 .nav-btn span{font-size:23px}.nav-btn.active{color:#77e4d7;background:#202f47}
 .loading{display:grid;place-content:center;text-align:center;min-height:48dvh;color:var(--muted)}
 .spinner{width:32px;height:32px;border:3px solid #313c5d;border-top-color:#84e7e2;border-radius:50%;animation:spin 1s linear infinite;margin:auto}@keyframes spin{to{transform:rotate(360deg)}}
-.toast{position:fixed;z-index:20;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));max-width:460px;width:max-content;min-width:220px;transform:translate(-50%,15px);opacity:0;pointer-events:none;background:#314168;border:1px solid #62729b;color:#fff;border-radius:16px;padding:12px 15px;text-align:center;font-size:12px;font-weight:700;transition:opacity .2s,transform .2s}
+.toast{position:fixed;z-index:20;left:50%;bottom:calc(90px + var(--pets-bottom-offset));max-width:460px;width:max-content;min-width:220px;transform:translate(-50%,15px);opacity:0;pointer-events:none;background:#314168;border:1px solid #62729b;color:#fff;border-radius:16px;padding:12px 15px;text-align:center;font-size:12px;font-weight:700;transition:opacity .2s,transform .2s}
 .toast.visible{opacity:1;transform:translate(-50%,0)}
-.modal-root{position:fixed;inset:0;background:#090d1dba;z-index:10;display:grid;place-items:end center;padding:20px}
+.modal-root{position:fixed;inset:0;background:#090d1dba;z-index:10;display:grid;place-items:end center;padding:calc(20px + var(--pets-top-offset)) 20px calc(20px + var(--pets-bottom-offset))}
 .modal{width:min(520px,100%);padding:24px;border-radius:24px;background:#252e49;border:1px solid #4e6085;box-shadow:0 20px 60px #0006}
 .modal h3{margin:0 0 10px;font-size:19px}.modal p{font-size:14px;line-height:1.6;color:#bac6e6}
 .modal-buttons{display:flex;gap:9px}.modal-buttons button{flex:1}
