@@ -546,6 +546,8 @@ async def spawn_event(bot: Bot, db: Database, config: Config, pet, now_ts: float
     )
     if msg is not None:
         await db.set_pet_event_message(event_id, msg.message_id)
+    else:
+        await db.fail_pet_event_delivery(event_id, now_ts + 3600)
     return msg is not None
 
 
@@ -583,10 +585,7 @@ async def expire_event(bot: Bot, db: Database, config: Config, ev) -> None:
     kind = EVENTS.get(ev["kind"])
     if pet is None or kind is None:
         return
-    if ev["kind"] == "cold":
-        pet = await add_care(db, pet, config, joy=-30, energy=-20)
-    elif ev["kind"] == "snack":
-        pet = await add_care(db, pet, config, food=20)
+    # Effects were applied atomically when the event expired in the database.
     names = await _names(db, pet)
     await _finish_event_message(
         bot, ev, event_caption(pet, names, kind) + "\n\n" + EXPIRED_TEXT[ev["kind"]]
@@ -602,7 +601,7 @@ async def process_pet_events(
         return 0
     now = now or datetime.now(config.tz)
     now_ts = now.timestamp()
-    for ev in await db.expire_pet_events(now_ts):
+    for ev in await db.expire_pet_events(now_ts, config.tz):
         try:
             await expire_event(bot, db, config, ev)
         except Exception:
@@ -670,25 +669,23 @@ async def on_event(callback: CallbackQuery, db: Database, config: Config) -> Non
     chat_id = int(pet["chat_id"])
     now = time.time()
 
-    paid = False
-    if kind.code == "cold":
-        status, balance = await db.adjust_balance(
-            chat_id, user.id, -CURE_PRICE, "питомец: лекарство", None
-        )
-        if status != "ok":
-            await callback.answer(f"Лекарство стоит {CURE_PRICE} 🍬, у тебя {fmt(balance)}",
-                                  show_alert=True)
-            return
-        paid = True
-
-    status, ev = await db.press_pet_event(event_id, user.id, now, kind.together)
-    if status in ("gone", "again"):
-        if paid:
-            await db.adjust_balance(chat_id, user.id, CURE_PRICE,
-                                    "питомец: возврат за лекарство", None, earned=0)
-        await callback.answer("Уже нажато 🙂" if status == "again" else "Событие закончилось")
+    status, ev, pet, result = await db.resolve_pet_event(
+        event_id, user.id, choice, now, config.tz,
+    )
+    if status == "forbidden":
+        await callback.answer("Это чужой питомец", show_alert=True)
         return
-
+    if status == "insufficient":
+        row = await db.get_user(chat_id, user.id)
+        balance = int(row["balance"]) if row else 0
+        await callback.answer(
+            f"Лекарство стоит {CURE_PRICE} 🍬, у тебя {fmt(balance)}",
+            show_alert=True,
+        )
+        return
+    if status in ("gone", "again", "invalid"):
+        await callback.answer("Уже нажато 🙂" if status == "again" else "Событие закончено")
+        return
     names = await _names(db, pet)
     who = _who(names, user.id)
     if status == "wait":
@@ -702,37 +699,8 @@ async def on_event(callback: CallbackQuery, db: Database, config: Config) -> Non
             except TelegramBadRequest:
                 pass
         return
-
-    if kind.code == "coin":
-        await db.adjust_balance(chat_id, user.id, 1, "питомец: монетка", None)
-        result = f"🪙 {who} забрал монетку: +1 🍬"
-    elif kind.code == "butterfly":
-        for uid in (pet["user_a"], pet["user_b"]):
-            await db.adjust_balance(chat_id, uid, 1, "питомец: бабочка", None)
-        pet = await add_care(db, pet, config, joy=30)
-        result = "🦋 Поймали вдвоём! Питомец в восторге (+30 настроения), каждому +1 🍬"
-    elif kind.code == "parcel":
-        owned = parse_set(pet["items"])
-        free = [i for i in WEARABLES if i.code not in owned]
-        if free:
-            item = secrets.choice(free)
-            pet = await db.update_pet(int(pet["id"]), items=join_set(owned + [item.code]))
-            result = (f"🎁 {who} открыл посылку, а там {item.emoji} {item.title}! "
-                      "Надеть — в гардеробе.")
-        else:
-            await db.adjust_balance(chat_id, user.id, 3, "питомец: посылка", None)
-            result = f"🎁 {who} открыл посылку, а там 3 🍬!"
-    elif kind.code == "cold":
-        pet = await add_care(db, pet, config, joy=20, energy=10)
-        result = f"💊 {who} вылечил питомца (−{CURE_PRICE} 🍬). Он снова бодр!"
-    else:  # snack
-        if choice == "allow":
-            pet = await add_care(db, pet, config, food=30, joy=10)
-            result = f"😋 {who} разрешил — питомец счастлив и сыт!"
-        else:
-            pet = await add_care(db, pet, config, joy=-10)
-            result = f"🙅 {who} отобрал пончик. Питомец обиделся, зато фигура цела 😅"
     await callback.answer("Готово!")
-    await _finish_event_message(callback.bot, ev,
-                                event_caption(pet, names, kind) + "\n\n" + result)
+    await _finish_event_message(
+        callback.bot, ev, event_caption(pet, names, kind) + "\n\n✅ " + who + ": " + result,
+    )
 

@@ -21,6 +21,7 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
+from backup_db import backup_keeper
 from config import Config, load_config
 from db import Database
 from handlers import (
@@ -286,6 +287,7 @@ async def main() -> None:
     watchdog = asyncio.create_task(bonus_watchdog(bot, db, config))
     pets_keeper = asyncio.create_task(pet_keeper(bot, db, config))
     pets_events = asyncio.create_task(pet_events_keeper(bot, db, config))
+    db_backups = asyncio.create_task(backup_keeper(db))
     try:
         await set_commands(bot, config)
         await load_active_chats(db)   # викторины, пережившие рестарт
@@ -307,8 +309,9 @@ async def main() -> None:
         watchdog.cancel()
         pets_keeper.cancel()
         pets_events.cancel()
+        db_backups.cancel()
         await asyncio.gather(
-            announcer, monthly_announcer, watchdog, pets_keeper, pets_events,
+            announcer, monthly_announcer, watchdog, pets_keeper, pets_events, db_backups,
             return_exceptions=True,
         )
         await db.close()

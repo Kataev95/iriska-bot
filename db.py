@@ -170,6 +170,13 @@ class Database(PetGameDatabase):
         self._db = await aiosqlite.connect(self.path)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
+        # Do not alter an existing players' database without a valid backup.
+        cur = await self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pets'"
+        )
+        if await cur.fetchone() is not None:
+            from backup_db import create_consistent_backup
+            await create_consistent_backup(self.path, label="pre_migration")
         await self._db.executescript(SCHEMA)
         await self._migrate()
         await self._migrate_pet_game()
@@ -1658,22 +1665,157 @@ class Database(PetGameDatabase):
             cur = await db.execute("SELECT * FROM pet_events WHERE id = ?", (event_id,))
             return ("done" if done else "wait"), await cur.fetchone()
 
-    async def expire_pet_events(self, now_ts: float) -> list[aiosqlite.Row]:
-        """Закрывает просроченные события и возвращает их."""
-        db = self._require()
-        async with self._lock:
-            cur = await db.execute(
-                "SELECT * FROM pet_events WHERE status = 'open' AND expires_ts < ?",
-                (now_ts,),
-            )
-            rows = list(await cur.fetchall())
-            if rows:
-                ids = [int(r["id"]) for r in rows]
-                marks = ",".join("?" * len(ids))
-                await db.execute(
-                    f"UPDATE pet_events SET status = 'expired' WHERE id IN ({marks})", ids
+    async def resolve_pet_event(self, event_id, user_id, choice, now_ts, tz):
+        """Settle button press and all effects in ONE SQLite transaction.
+
+        The event is never finalized before the reward/effect is committed.
+        A failed ledger write rolls back everything, including event status.
+        """
+        import secrets
+        from pet_care import CURE_PRICE, EVENTS, WEARABLES, clamp, join_set, parse_set
+
+        async with self._game_transaction() as db:
+            ev = await (
+                await db.execute("SELECT * FROM pet_events WHERE id=?", (event_id,))
+            ).fetchone()
+            if ev is None or ev["status"] != "open" or ev["expires_ts"] < now_ts:
+                return "gone", ev, None, ""
+            pet = await (
+                await db.execute("SELECT * FROM pets WHERE id=?", (ev["pet_id"],))
+            ).fetchone()
+            kind = EVENTS.get(ev["kind"])
+            if pet is None or pet["status"] != "active" or kind is None:
+                return "gone", ev, pet, ""
+            if user_id not in (pet["user_a"], pet["user_b"]):
+                return "forbidden", ev, pet, ""
+            if choice not in {item[0] for item in kind.buttons}:
+                return "invalid", ev, pet, ""
+            pressed = [p for p in ev["pressed"].split(",") if p]
+            if str(user_id) in pressed:
+                return "again", ev, pet, ""
+            if kind.code == "cold":
+                cur = await db.execute(
+                    "UPDATE users SET balance=balance-? "
+                    "WHERE chat_id=? AND user_id=? AND balance>=?",
+                    (CURE_PRICE, pet["chat_id"], user_id, CURE_PRICE),
                 )
-                await db.commit()
+                if cur.rowcount != 1:
+                    return "insufficient", ev, pet, ""
+                await db.execute(
+                    "INSERT INTO ledger(chat_id,user_id,amount,reason) VALUES(?,?,?,?)",
+                    (pet["chat_id"], user_id, -CURE_PRICE, "питомец: лекарство"),
+                )
+            pressed.append(str(user_id))
+            done = not kind.together or len(pressed) >= 2
+            await db.execute(
+                "UPDATE pet_events SET pressed=?,status=? WHERE id=?",
+                (",".join(pressed), "done" if done else "open", event_id),
+            )
+            if not done:
+                return "wait", ev, pet, ""
+
+            async def reward(uid, coins, reason):
+                await db.execute(
+                    "INSERT OR IGNORE INTO users(chat_id,user_id) VALUES(?,?)",
+                    (pet["chat_id"], uid),
+                )
+                await db.execute(
+                    "UPDATE users SET balance=balance+?,earned_total=earned_total+? "
+                    "WHERE chat_id=? AND user_id=?",
+                    (coins, coins, pet["chat_id"], uid),
+                )
+                await db.execute(
+                    "INSERT INTO ledger(chat_id,user_id,amount,reason) VALUES(?,?,?,?)",
+                    (pet["chat_id"], uid, coins, reason),
+                )
+
+            f = j = e = 0
+            if kind.code == "coin":
+                await reward(user_id, 1, "питомец: монетка")
+                result = "забрал монетку: +1 🍬"
+            elif kind.code == "butterfly":
+                for uid in (pet["user_a"], pet["user_b"]):
+                    await reward(uid, 1, "питомец: бабочка")
+                j = 30
+                result = "Бабочка поймана вдвоём! +30 настроения и по 1 🍬 каждому."
+            elif kind.code == "parcel":
+                owned = parse_set(pet["items"])
+                free = [item for item in WEARABLES if item.code not in owned]
+                if free:
+                    item = secrets.choice(free)
+                    await db.execute(
+                        "UPDATE pets SET items=? WHERE id=?",
+                        (join_set(owned + [item.code]), pet["id"]),
+                    )
+                    result = f"В посылке {item.emoji} {item.title}! Предмет уже в гардеробе."
+                else:
+                    await reward(user_id, 3, "питомец: посылка")
+                    result = "В посылке 3 🍬!"
+            elif kind.code == "cold":
+                j, e = 20, 10
+                result = f"Питомец выздоровел! Лекарство стоило {CURE_PRICE} 🍬."
+            elif choice == "allow":
+                f, j = 30, 10
+                result = "Пончик съеден. +30 сытости, +10 настроения."
+            else:
+                j = -10
+                result = "Пончик отобран. −10 настроения."
+            if f or j or e:
+                pet = await self._game_refresh(db, pet, now_ts, tz)
+                await db.execute(
+                    "UPDATE pets SET food=?, joy=?, energy=? WHERE id=?",
+                    (clamp(pet["food"] + f), clamp(pet["joy"] + j),
+                     clamp(pet["energy"] + e), pet["id"]),
+                )
+            ev = await (
+                await db.execute("SELECT * FROM pet_events WHERE id=?", (event_id,))
+            ).fetchone()
+            return "done", ev, pet, result
+
+    async def fail_pet_event_delivery(self, event_id: int, retry_at: float) -> None:
+        """Do not consume daily event quota when Telegram delivery failed."""
+        async with self._game_transaction() as db:
+            ev = await (
+                await db.execute("SELECT * FROM pet_events WHERE id=?", (event_id,))
+            ).fetchone()
+            if ev is None or ev["status"] != "open" or ev["message_id"]:
+                return
+            await db.execute(
+                "UPDATE pet_events SET status='delivery_failed' WHERE id=?", (event_id,)
+            )
+            await db.execute(
+                "UPDATE pets SET events_count=MAX(0,events_count-1),"
+                "next_event_ts=? WHERE id=?",
+                (retry_at, ev["pet_id"]),
+            )
+
+    async def expire_pet_events(self, now_ts: float, tz=None) -> list[aiosqlite.Row]:
+        """Закрывает просроченные события и возвращает их."""
+        from datetime import timezone
+        from pet_care import clamp
+        tz = tz or timezone.utc
+        async with self._game_transaction() as db:
+            rows = list(await (
+                await db.execute(
+                    "SELECT * FROM pet_events WHERE status='open' AND expires_ts<?",
+                    (now_ts,),
+                )
+            ).fetchall())
+            for ev in rows:
+                pet = await (
+                    await db.execute("SELECT * FROM pets WHERE id=?", (ev["pet_id"],))
+                ).fetchone()
+                if pet and pet["status"] == "active" and ev["kind"] in ("cold", "snack"):
+                    pet = await self._game_refresh(db, pet, now_ts, tz)
+                    f, j, e = (0, -30, -20) if ev["kind"] == "cold" else (20, 0, 0)
+                    await db.execute(
+                        "UPDATE pets SET food=?,joy=?,energy=? WHERE id=?",
+                        (clamp(pet["food"] + f), clamp(pet["joy"] + j),
+                         clamp(pet["energy"] + e), pet["id"]),
+                    )
+                await db.execute(
+                    "UPDATE pet_events SET status='expired' WHERE id=?", (ev["id"],)
+                )
             return rows
 
     async def use_pet_freezes(self, yesterday: str) -> list[aiosqlite.Row]:
