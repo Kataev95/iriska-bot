@@ -27,7 +27,9 @@ syncSafeArea();
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
              group: "food", busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
-             returnTab: "home", seasonFrom:"home", season:null, seasonLoading:false,
+             returnTab: "home", studioFrom:"home", studioMode:"frames",
+             studio:null, studioLoading:false, studioFetchedAt:0, studioRequest:0,
+             seasonFrom:"home", season:null, seasonLoading:false,
              seasonFetchedAt:0, seasonRequest:0,
              league: null, leagueLoading:false, leagueFetchedAt:0, leagueRequest:0,
              market: null, marketLoading:false, marketFetchedAt:0,
@@ -188,6 +190,9 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect("🍬 +"+(after.balance-before.balance)+" ирисок!", "reward");
     return;
   }
+  if (kind==="studio_equip" && message.startsWith("✅")) {
+    playEffect("🎨 Новый образ питомца!", "care");return;
+  }
   if (kind==="season_claim" && message.startsWith("✅")) {
     playEffect("🎖 Новый титул в коллекции!", "reward");return;
   }
@@ -227,12 +232,18 @@ function renderPicker() {
     safe(ui.pet?.name || "Питомцы")+' ▾</button>'+options+'</div>';
 }
 function hero(p) {
+  const frameCodes=["classic","grove","neon","atelier","champion","cosmos"];
+  const stickerIcons={paw:"🐾",compass:"🧭",heart:"💞",medal:"🎯",crystal:"💎",crown:"👑"};
+  const frame=frameCodes.includes(p.style?.frame)?p.style.frame:"classic";
+  const sticker=stickerIcons[p.style?.sticker]||"🐾";
   const target = p.next_xp ?? p.xp;
   const prior = Number.isFinite(p.level_start_xp) ? p.level_start_xp : 25*p.level*(p.level-1);
   const progress = p.next_xp == null ? 100 :
     Math.min(100,Math.max(0,Math.round((p.xp-prior)/Math.max(1,target-prior)*100)));
-  return '<div class="hero"><div class="hero-overlay">✨ Уровень '+p.level+' / 20</div>'+
+  return '<div class="hero studio-frame studio-frame-'+frame+
+    '"><div class="hero-overlay">✨ Уровень '+p.level+' / 20</div>'+
     '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'" decoding="async">'+
+    '<span class="studio-hero-sticker" aria-hidden="true">'+sticker+'</span>'+
     '<button type="button" class="pet-touch" data-click="pet-greet" aria-label="Поздороваться с питомцем — визуальный эффект, без затрат ирисок">'+
       '<span class="pet-hint" aria-hidden="true">✨ Поприветствовать</span></button></div>'+
     '<div class="panel"><div class="eyebrow">МОЙ ПИТОМЕЦ</div>'+
@@ -262,6 +273,9 @@ function home(p) {
     '<div class="notice">'+(p.today_fed
       ? "✅ Сегодня ваша пара уже поддержала серию!"
       : "🕊 Напишите друг другу в чате, чтобы поддержать серию общения.")+'</div>'+
+    '<div class="panel studio-link"><div class="row"><div><div class="h2">🎨 Студия и альбом</div>'+
+    '<p class="subtitle">Рамки, значки и история ваших приключений</p></div>'+
+    '<button class="btn btn-primary" data-click="studio">Открыть →</button></div></div>'+
     '<div class="panel"><div class="row"><strong>🎀 Гардероб</strong>'+
     '<button class="btn btn-quiet" data-click="wardrobe">Открыть →</button></div>'+
     '<p class="subtitle">'+p.items.length+' вещей · '+p.worn.length+' надето'+
@@ -474,7 +488,8 @@ function render() {
     market: p => window.PetsMarket.renderMarket(
       ui.market,p,ui.config,ui.marketSelection,serverNow()),
     league: p => window.PetsLeague.renderLeague(ui.league,p,serverNow()),
-    season: p => window.PetsSeason.renderSeason(ui.season,p,serverNow())
+    season: p => window.PetsSeason.renderSeason(ui.season,p,serverNow()),
+    studio: p => window.PetsStudio.renderStudio(ui.studio,p,ui.studioMode)
   }[ui.tab]||home)(p);
 }
 function setPet(snapshot) {
@@ -498,6 +513,7 @@ async function loadPet(id) {
     ui.market=null; ui.marketFetchedAt=0; ++ui.marketRequest;
     ui.league=null; ui.leagueFetchedAt=0; ++ui.leagueRequest;
     ui.season=null; ui.seasonFetchedAt=0; ++ui.seasonRequest;
+    ui.studio=null; ui.studioFetchedAt=0; ++ui.studioRequest;
     setPet(pet);
   } finally {ui.syncing = false;}
 }
@@ -560,6 +576,21 @@ async function loadSeason({force=false,quiet=true}={}) {
     if(!quiet) showToast(e.message);
   } finally {ui.seasonLoading=false;}
 }
+async function loadStudio({force=false,quiet=true}={}) {
+  if(!ui.selected || !TG?.initData || document.hidden || (ui.studioLoading&&!force)) return;
+  if(!force && ui.studio && Date.now()-ui.studioFetchedAt<60000) return;
+  const id=ui.selected,serial=++ui.studioRequest;
+  ui.studioLoading=true;
+  try {
+    const data=await api('/api/studio/'+id);
+    if(serial===ui.studioRequest && ui.selected===id) {
+      ui.studio=data;ui.studioFetchedAt=Date.now();
+      if(ui.tab==="studio") render();
+    }
+  } catch(e) {
+    if(!quiet) showToast(e.message);
+  } finally {ui.studioLoading=false;}
+}
 function syncBackButton() {
   try {
     if (ui.tab !== "home" || !modal.classList.contains("hidden")) TG?.BackButton?.show();
@@ -567,8 +598,9 @@ function syncBackButton() {
   } catch {}
 }
 function goToTab(tab) {
+  if(tab==="studio" && ui.tab!=="studio") ui.studioFrom=ui.tab;
   if(tab==="season" && ui.tab!=="season") ui.seasonFrom=ui.tab;
-  if (["wardrobe","inventory","house","business","market","league","season"].includes(tab) && !["wardrobe","inventory","house","business","market","league","season"].includes(ui.tab)) {
+  if (["wardrobe","inventory","house","business","market","league","season","studio"].includes(tab) && !["wardrobe","inventory","house","business","market","league","season","studio"].includes(ui.tab)) {
     ui.returnTab = ui.tab;
   }
   ui.tab = tab;
@@ -578,6 +610,7 @@ function goToTab(tab) {
   if(tab==="market") loadMarket();
   if(tab==="league") loadLeague();
   if(tab==="season") loadSeason({quiet:false});
+  if(tab==="studio") loadStudio({quiet:false});
 }
 function closeModal() {
   modal.classList.add("hidden");
@@ -585,8 +618,9 @@ function closeModal() {
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
+  else if (ui.tab==="studio") goToTab(ui.studioFrom||"home");
   else if (ui.tab==="season") goToTab(ui.seasonFrom||"home");
-  else if (["wardrobe","inventory","house","business","market","league","season"].includes(ui.tab)) goToTab(ui.returnTab || "home");
+  else if (["wardrobe","inventory","house","business","market","league","season","studio"].includes(ui.tab)) goToTab(ui.returnTab || "home");
   else if (ui.tab !== "home") goToTab("home");
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
@@ -594,6 +628,7 @@ document.addEventListener("keydown", e => {if(e.key === "Escape") goBack();});
 function syncTimers() {
   if (!ui.pet || ui.busy) return;
   if(ui.tab==='league') loadLeague();
+  if(ui.tab==='studio') loadStudio();
   if(ui.tab==='season') {
     const label=app.querySelector("[data-season-time]");
     if(label && ui.season?.season?.end_ts) {
@@ -671,6 +706,9 @@ async function perform(kind, code="", extra={}) {
       if(kind.startsWith("season_")) {
         ++ui.seasonRequest; ui.season=null; ui.seasonFetchedAt=0;
       }
+      if(kind==="studio_equip") {
+        ++ui.studioRequest; ui.studio=null; ui.studioFetchedAt=0;
+      }
       setPet(result.pet);
       showActionEffect(kind, code, before, result.pet, result.message);
       if(kind.startsWith("market_")) {
@@ -678,6 +716,7 @@ async function perform(kind, code="", extra={}) {
         await loadMarket({force:true,quiet:false});
       }
       if(kind.startsWith("season_")) await loadSeason({force:true,quiet:false});
+      if(kind==="studio_equip") await loadStudio({force:true,quiet:false});
     }
     showToast(result.message);
     if (result.message.startsWith("✅") || result.message.startsWith("💕")) haptic("success");
@@ -703,6 +742,24 @@ document.addEventListener("click", async e=>{
   if (target.dataset.click==="business-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.click==="market") {tap();goToTab("market");return;}
   if (target.dataset.click==="market-back") {tap();goToTab(ui.returnTab||"home");return;}
+  if (target.dataset.click==="studio") {tap();goToTab("studio");return;}
+  if (target.dataset.click==="studio-back") {tap();goToTab(ui.studioFrom||"home");return;}
+  if (target.dataset.studioMode) {
+    const mode=target.dataset.studioMode;
+    if(["frames","stickers","album"].includes(mode)){
+      ui.studioMode=mode;tap();render();
+    }
+    return;
+  }
+  if (target.dataset.studioRefresh) {await loadStudio({force:true,quiet:false});return;}
+  if (target.dataset.studioEquip) {
+    const slot=target.dataset.studioSlot,code=target.dataset.studioEquip;
+    const source=slot==="frame"?ui.studio?.frames:
+      slot==="sticker"?ui.studio?.stickers:[];
+    const item=source?.find(x=>x.code===code);
+    if(item?.unlocked&&!item.equipped) await perform("studio_equip",code,{slot});
+    return;
+  }
   if (target.dataset.click==="season") {tap();goToTab("season");return;}
   if (target.dataset.click==="season-back") {
     tap();goToTab(ui.seasonFrom||"home");return;
@@ -926,6 +983,7 @@ document.addEventListener("visibilitychange", () => {
     if(ui.tab==="market") loadMarket({force:true});
     if(ui.tab==="league") loadLeague({force:true});
     if(ui.tab==="season") loadSeason({force:true});
+    if(ui.tab==="studio") loadStudio({force:true});
   }
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));

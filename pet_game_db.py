@@ -119,6 +119,7 @@ class PetGameDatabase(PetBusinessDatabase):
             )
         await self._migrate_business()
         await self._migrate_seasons()
+        await self._migrate_studio()
 
     @asynccontextmanager
     async def _game_transaction(self):

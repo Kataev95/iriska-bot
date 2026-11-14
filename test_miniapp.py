@@ -539,6 +539,58 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((before["balance"],before["earned_total"]),
                          (after["balance"],after["earned_total"]))
 
+    async def test_private_studio_album_and_verified_equip(self):
+        self.assertEqual((await self.client.get("/api/studio/1")).status,401)
+        forbidden=await self.client.get("/api/studio/2",headers=self.headers)
+        self.assertEqual(forbidden.status,403)
+        forbidden=await self.client.get("/api/studio/1",
+            headers={"X-Telegram-Init-Data":signed(201)})
+        self.assertEqual(forbidden.status,403)
+        state=await self.client.get("/api/studio/1",headers=self.headers)
+        self.assertEqual(state.status,200)
+        info=await state.json()
+        self.assertEqual(info["equipped"]["frame"],"classic")
+        self.assertEqual(info["equipped"]["sticker"],"paw")
+        self.assertEqual(info["album"][0]["kind"],"origin")
+        before=await self.db.get_user(CHAT_ID,101)
+        forged=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"studio_equip","slot":"frame","code":"cosmos",
+                  "trips":999999,"unlocked":True,"balance":9000})
+        self.assertEqual(forged.status,200)
+        self.assertIn("🔒",(await forged.json())["message"])
+        invalid=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"studio_equip","slot":"frame",
+                  "code":"classic; background:red"})
+        self.assertIn("⚠️",(await invalid.json())["message"])
+        forbidden=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":2,"kind":"studio_equip","slot":"frame","code":"classic"})
+        self.assertEqual(forbidden.status,403)
+        now=time.time()
+        day=__import__("datetime").datetime.fromtimestamp(now,self.config.tz).date().isoformat()
+        for i in range(3):
+            await self.db._require().execute(
+                "INSERT INTO pet_trips"
+                "(pet_id,user_id,day,route,started_at,finish_at,xp,coins,claimed_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (1,101,day,"park",now-500-i,now-100,35,2,now-i),
+            )
+        await self.db._require().commit()
+        equipped=await self.client.post("/api/action",headers=self.headers,
+            json={"pet_id":1,"kind":"studio_equip","slot":"frame",
+                  "code":"grove"})
+        self.assertEqual(equipped.status,200)
+        data=await equipped.json()
+        self.assertIn("✅",data["message"])
+        self.assertEqual(data["pet"]["style"]["frame"],"grove")
+        profile=await self.client.get("/api/pet/1",headers=self.headers)
+        self.assertEqual((await profile.json())["style"]["frame"],"grove")
+        album=await self.client.get("/api/studio/1",headers=self.headers)
+        updated=await album.json()
+        self.assertEqual(sum(x["kind"]=="trip" for x in updated["album"]),3)
+        after=await self.db.get_user(CHAT_ID,101)
+        self.assertEqual((before["balance"],before["earned_total"]),
+                         (after["balance"],after["earned_total"]))
+
     async def test_static_api_and_no_web_auth_bypass(self):
         r = await self.client.get("/assets/pets/dragon_baby.jpg")
         self.assertEqual(r.status, 200)
@@ -578,7 +630,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=5", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=10", html)
+        self.assertIn("/static/app.js?v=11", html)
+        self.assertIn("/static/studio.js?v=1", html)
+        self.assertIn("/static/studio.css?v=1", html)
         self.assertIn("/static/season.js?v=1", html)
         self.assertIn("/static/season.css?v=1", html)
         self.assertIn("/static/league.js?v=1", html)
@@ -631,6 +685,11 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('season-hero', (static/"season.css").read_text(encoding="utf-8"))
         self.assertIn('data-season-claim=', (static/"season.js").read_text(encoding="utf-8"))
         self.assertIn('data-season-equip=', (static/"season.js").read_text(encoding="utf-8"))
+        self.assertIn('window.PetsStudio.renderStudio', js)
+        self.assertIn('studio-preview', (static/"studio.css").read_text(encoding="utf-8"))
+        self.assertIn('data-studio-equip=', (static/"studio.js").read_text(encoding="utf-8"))
+        self.assertIn('studio-memory', (static/"studio.js").read_text(encoding="utf-8"))
+        self.assertIn('studio-hero-sticker', js)
 
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
@@ -639,7 +698,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("app.js", "house.js", "business.js", "market.js", "league.js", "season.js"):
+        for name in ("app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
