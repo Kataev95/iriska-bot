@@ -5,7 +5,7 @@
   сытости, настроения и энергии, серия, надетые аксессуары;
 - кнопки под карточкой меняют то же сообщение — чат не засоряется;
 - нажимать могут только хозяева питомца;
-- 2 раза в день (10:00–22:00) у питомца случается событие с кнопками.
+- не больше одного случайного события с кнопками в день на чат.
 
 Картинки лежат в assets/pets/{ключ}.jpg; после первой отправки бот
 запоминает file_id Telegram и дальше не загружает файл заново.
@@ -18,7 +18,7 @@ import logging
 import os
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from miniapp.auth import main_app_link
 from rich_ui import (
@@ -63,7 +63,6 @@ from pet_care import (
     image_path,
     join_set,
     mood_text,
-    next_event_delay,
     parse_set,
     random_event,
     stats_lines,
@@ -903,21 +902,35 @@ def event_photo_key(pet, kind_code: str) -> str:
     return f"{sp}_hungry" if kind_code == "cold" else f"{sp}_happy"
 
 
-async def spawn_event(bot: Bot, db: Database, config: Config, pet, now_ts: float) -> bool:
+async def spawn_event(
+    bot: Bot, db: Database, config: Config, pet, now_ts: float,
+    day_bounds: tuple[float, float],
+) -> bool:
     kind = random_event()
     ttl = max(config.pet_event_ttl_hours, 0.1) * 3600
-    event_id = await db.create_pet_event(int(pet["id"]), int(pet["chat_id"]),
-                                         kind.code, now_ts, ttl)
-    names = await _names(db, pet)
-    msg = await send_pet_photo(
-        bot, db, int(pet["chat_id"]), event_photo_key(pet, kind.code),
-        event_caption(pet, names, kind), markup=event_keyboard(event_id, kind),
+    chat_id = int(pet["chat_id"])
+    event_id = await db.create_pet_event(
+        int(pet["id"]), chat_id, kind.code, now_ts, ttl, day_bounds=day_bounds,
     )
-    if msg is not None:
-        await db.set_pet_event_message(event_id, msg.message_id)
-    else:
-        await db.fail_pet_event_delivery(event_id, now_ts + 3600)
-    return msg is not None
+    if event_id is None:
+        return False
+
+    try:
+        names = await _names(db, pet)
+        msg = await send_pet_photo(
+            bot, db, chat_id, event_photo_key(pet, kind.code),
+            event_caption(pet, names, kind), markup=event_keyboard(event_id, kind),
+        )
+    except Exception:
+        await db.fail_pet_event_delivery(event_id)
+        logger.exception("Не удалось отправить событие питомца в чат %s", chat_id)
+        return False
+
+    if msg is None:
+        await db.fail_pet_event_delivery(event_id)
+        return False
+    await db.set_pet_event_message(event_id, msg.message_id)
+    return True
 
 
 async def _finish_event_message(bot: Bot, ev, caption: str) -> None:
@@ -984,24 +997,17 @@ async def process_pet_events(
         return 0
     if not (EVENT_HOURS[0] <= now.hour < EVENT_HOURS[1]):
         return 0
-    today = now.strftime("%Y-%m-%d")
-    ttl = max(config.pet_event_ttl_hours, 0.1) * 3600
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_bounds = (midnight.timestamp(), (midnight + timedelta(days=1)).timestamp())
+    by_chat = {}
+    for pet in await db.pets_for_events(*day_bounds):
+        by_chat.setdefault(pet["chat_id"], []).append(pet)
+
     spawned = 0
-    for pet in await db.pets_for_events():
-        if pet["events_day"] != today:
-            pet = await db.update_pet(
-                int(pet["id"]), events_day=today, events_count=0,
-                next_event_ts=first_event_ts(now),
-            )
-        if int(pet["events_count"]) >= config.pet_events_per_day:
+    for chat_id, pets in by_chat.items():
+        if now_ts < first_event_ts(now, chat_id):
             continue
-        if now_ts < float(pet["next_event_ts"]):
-            continue
-        await db.update_pet(
-            int(pet["id"]), events_count=int(pet["events_count"]) + 1,
-            next_event_ts=now_ts + max(next_event_delay(), ttl),
-        )
-        if await spawn_event(bot, db, config, pet, now_ts):
+        if await spawn_event(bot, db, config, secrets.choice(pets), now_ts, day_bounds):
             spawned += 1
     return spawned
 

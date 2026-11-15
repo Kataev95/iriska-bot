@@ -149,6 +149,7 @@ CREATE INDEX IF NOT EXISTS idx_pets_chat ON pets (chat_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pets_pair ON pets (chat_id, user_a, user_b)
     WHERE status IN ('pending', 'active');
 CREATE INDEX IF NOT EXISTS idx_pet_events_open ON pet_events (status, expires_ts);
+CREATE INDEX IF NOT EXISTS idx_pet_events_chat_time ON pet_events (chat_id, created_ts);
 """
 
 
@@ -1605,24 +1606,37 @@ class Database(PetGameDatabase):
             )
             await db.commit()
 
-    async def pets_for_events(self) -> list[aiosqlite.Row]:
-        """Живые вылупившиеся питомцы с идущей серией."""
+    async def pets_for_events(self, day_start: float, day_end: float) -> list[aiosqlite.Row]:
+        """Вылупившиеся питомцы из чатов без события за текущий день."""
         cur = await self._require().execute(
-            "SELECT * FROM pets WHERE status = 'active' AND best_streak > 0 ORDER BY id"
+            "SELECT p.* FROM pets p WHERE p.status='active' AND p.best_streak > 0 "
+            "AND NOT EXISTS (SELECT 1 FROM pet_events e WHERE e.chat_id=p.chat_id "
+            "AND e.created_ts >= ? AND e.created_ts < ?)",
+            (day_start, day_end),
         )
         return list(await cur.fetchall())
 
     async def create_pet_event(
         self, pet_id: int, chat_id: int, kind: str, now_ts: float, ttl: float,
-    ) -> int:
-        db = self._require()
-        async with self._lock:
+        *, day_bounds: tuple[float, float] | None = None,
+    ) -> int | None:
+        """Зарезервировать дневное событие чата до отправки в Telegram."""
+        async with self._game_transaction() as db:
+            if day_bounds is not None:
+                existing = await (
+                    await db.execute(
+                        "SELECT 1 FROM pet_events WHERE chat_id=? "
+                        "AND created_ts >= ? AND created_ts < ? LIMIT 1",
+                        (chat_id, *day_bounds),
+                    )
+                ).fetchone()
+                if existing is not None:
+                    return None
             cur = await db.execute(
                 "INSERT INTO pet_events (pet_id, chat_id, kind, created_ts, expires_ts) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (pet_id, chat_id, kind, now_ts, now_ts + ttl),
             )
-            await db.commit()
             return int(cur.lastrowid)
 
     async def set_pet_event_message(self, event_id: int, message_id: int) -> None:
@@ -1772,8 +1786,8 @@ class Database(PetGameDatabase):
             ).fetchone()
             return "done", ev, pet, result
 
-    async def fail_pet_event_delivery(self, event_id: int, retry_at: float) -> None:
-        """Do not consume daily event quota when Telegram delivery failed."""
+    async def fail_pet_event_delivery(self, event_id: int) -> None:
+        """Закрыть неотправленное событие без эффектов для питомца."""
         async with self._game_transaction() as db:
             ev = await (
                 await db.execute("SELECT * FROM pet_events WHERE id=?", (event_id,))
@@ -1782,11 +1796,6 @@ class Database(PetGameDatabase):
                 return
             await db.execute(
                 "UPDATE pet_events SET status='delivery_failed' WHERE id=?", (event_id,)
-            )
-            await db.execute(
-                "UPDATE pets SET events_count=MAX(0,events_count-1),"
-                "next_event_ts=? WHERE id=?",
-                (retry_at, ev["pet_id"]),
             )
 
     async def expire_pet_events(self, now_ts: float, tz=None) -> list[aiosqlite.Row]:

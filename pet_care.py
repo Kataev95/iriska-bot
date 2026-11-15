@@ -16,6 +16,7 @@ import os
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
+from hashlib import blake2s
 
 from pets import species_by_code, stage_for
 
@@ -245,15 +246,12 @@ def random_event() -> EventKind:
     return EVENTS[secrets.choice(list(EVENTS))]
 
 
-def first_event_ts(day_start: datetime) -> float:
-    """Первое событие дня: случайно между 10:00 и 13:00."""
-    base = day_start.replace(hour=10, minute=0, second=0, microsecond=0)
-    return base.timestamp() + secrets.randbelow(3 * 3600)
-
-
-def next_event_delay() -> float:
-    """Пауза до следующего события: 2–5 часов."""
-    return 2 * 3600 + secrets.randbelow(3 * 3600)
+def first_event_ts(day: datetime, chat_id: int) -> float:
+    """Время события между 10:00 и 13:00, стабильное при перезапуске."""
+    base = day.replace(hour=10, minute=0, second=0, microsecond=0)
+    key = f"{chat_id}:{day.date()}".encode()
+    offset = int.from_bytes(blake2s(key, digest_size=4).digest(), "big")
+    return base.timestamp() + offset % (3 * 3600)
 
 
 EVENT_HOURS = (10, 22)  # события приходят только днём
