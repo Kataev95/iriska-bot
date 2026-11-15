@@ -480,7 +480,7 @@ async def check_menu(db, cfg, pet_id, say, press, body, session,
     await db_.execute("UPDATE pets SET events_day=NULL WHERE id=?", (pet_id,))
     await db_.commit()
     with mock.patch.object(pet_menu, "random_event", lambda: EVENTS["coin"]), \
-            mock.patch.object(pet_menu, "first_event_ts", lambda now: 0):
+            mock.patch.object(pet_menu, "first_event_ts", lambda now, chat_id: 0):
         before = len(session.sent)
         assert await process_pet_events(bot, db, cfg, now=noon) == 1
         ev_msg = session.sent[before]

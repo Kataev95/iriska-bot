@@ -2,14 +2,19 @@
 
 import asyncio
 import sqlite3
+import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from backup_db import create_consistent_backup
+from config import load_config
 from db import Database
+from handlers.pet_menu import process_pet_events
 
 TZ = ZoneInfo("Europe/Moscow")
 NOW = datetime(2026, 11, 13, 12, tzinfo=TZ).timestamp()
@@ -39,6 +44,42 @@ class AtomicEventsTests(unittest.IsolatedAsyncioTestCase):
 
     async def event(self, kind):
         return await self.db.create_pet_event(self.pet_id, -100, kind, NOW, 3600)
+
+    async def test_scheduler_limits_events_per_chat_across_restart(self):
+        connection = self.db._require()
+        await connection.executemany(
+            "INSERT INTO pets(chat_id,user_a,user_b,invited_by,status,species,"
+            "streak,best_streak,created_ts) VALUES(?,?,?,?,'active','cat',7,7,?)",
+            [(-100, 3, 4, 3, NOW), (-200, 1, 2, 1, NOW)],
+        )
+        await connection.commit()
+
+        with patch.dict(os.environ, {"BOT_TOKEN": "12345:test", "BOT_TZ": TZ.key,
+                                     "PET_EVENTS_PER_DAY": "2", "PETS_ENABLED": "1"}):
+            config = load_config()
+        now = datetime.fromtimestamp(NOW, TZ).replace(hour=14)
+        send = AsyncMock(return_value=SimpleNamespace(message_id=99))
+        with patch("handlers.pet_menu.send_pet_photo", send):
+            # Overlapping scheduler runs both see eligible pets.
+            counts = await asyncio.gather(
+                process_pet_events(None, self.db, config, now=now),
+                process_pet_events(None, self.db, config, now=now),
+            )
+            self.assertEqual(sum(counts), 2)
+            self.assertCountEqual([call.args[2] for call in send.await_args_list],
+                                  [-100, -200])
+
+            await self.db.close()
+            self.db = Database(self.path)
+            await self.db.connect()
+            with patch("handlers.pet_menu.expire_event", AsyncMock()):
+                self.assertEqual(await process_pet_events(
+                    None, self.db, config, now=now.replace(hour=21)
+                ), 0)
+                self.assertEqual(await process_pet_events(
+                    None, self.db, config, now=now + timedelta(days=1)
+                ), 2)
+            self.assertEqual(send.await_count, 4)
 
     async def test_double_coin_and_foreign_owner(self):
         event_id = await self.event("coin")
