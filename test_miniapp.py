@@ -1,5 +1,6 @@
 """Mini App authorization and real SQLite integration tests without Telegram token."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -539,6 +540,73 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((before["balance"],before["earned_total"]),
                          (after["balance"],after["earned_total"]))
 
+    async def test_weekly_chapter_shared_progress_and_one_time_reward(self):
+        async def play(kind, code, uid=101, **extra):
+            response = await self.client.post(
+                "/api/action", headers={"X-Telegram-Init-Data": signed(uid)},
+                json={"pet_id": 1, "kind": kind, "code": code, **extra},
+            )
+            self.assertEqual(response.status, 200)
+            return await response.json()
+
+        boot = await self.client.get("/api/bootstrap", headers={
+            "X-Telegram-Init-Data": signed(101, start_param=f"week_{-CHAT_ID}"),
+        })
+        self.assertEqual((await boot.json())["chapter_pet_id"], 1)
+        foreign = await self.client.post(
+            "/api/action", headers={"X-Telegram-Init-Data": signed(201)},
+            json={"pet_id": 1, "kind": "chapter_finish", "code": "forest_trail"},
+        )
+        self.assertEqual(foreign.status, 403)
+        locked = await play("studio_equip", "trailkeeper", slot="frame")
+        self.assertIn("🔒", locked["message"])
+        chapter = locked["pet"]["chapter"]["code"]
+        invalid = await play("chapter_start", "forest", chapter=chapter)
+        self.assertIsNone(invalid["pet"]["trip"])
+        started = await play("chapter_start", "park", chapter=chapter)
+        trip_id = started["pet"]["chapter"]["trip_id"]
+        self.assertEqual(started["pet"]["trip"]["id"], trip_id)
+        premature = await play("chapter_craft", chapter, uid=102)
+        self.assertEqual(premature["pet"]["chapter"]["stage"], 0)
+        await self.db._require().execute(
+            "UPDATE pet_trips SET finish_at=? WHERE id=?", (time.time() - 1, trip_id),
+        )
+        await self.db._require().commit()
+        claimed = await play("claim", "", uid=102, trip_id=trip_id)
+        self.assertEqual(claimed["pet"]["chapter"]["stage"], 1)
+        self.assertEqual(claimed["pet"]["materials"]["wood"], 1)
+        results = await asyncio.gather(
+            play("chapter_craft", chapter), play("chapter_craft", chapter, uid=102),
+        )
+        self.assertEqual(sum(r["message"].startswith("✅") for r in results), 1)
+        self.assertTrue(all(r["pet"]["materials"]["wood"] == 0 for r in results))
+
+        finished = await play("chapter_finish", chapter)
+        self.assertEqual(finished["pet"]["chapter"]["stage"], 3)
+        self.assertTrue(finished["pet"]["chapter"]["shared"])
+        repeat = await play("chapter_finish", chapter)
+        self.assertEqual(repeat["message"], "Глава уже завершена")
+        equipped = await play("studio_equip", "trailkeeper", uid=102, slot="frame")
+        self.assertEqual(equipped["pet"]["style"]["frame"], "trailkeeper")
+        state = await self.db.studio_state(1, 101, self.config.tz)
+        pages = [e for e in state["album"] if e["kind"] == "chapter"]
+        self.assertEqual([e["icon"] for e in pages], ["💞"])
+
+        self.assertTrue(await self.db.reserve_chapter_announcement(CHAT_ID))
+        self.assertFalse(await self.db.reserve_chapter_announcement(CHAT_ID))
+        day = "2099-01-01"
+        stats = await self.db.chapter_stats(CHAT_ID, day)
+        self.assertEqual((stats["started"], stats["first_step"], stats["finished"],
+                          stats["shared"], stats["d1_total"], stats["d7_total"]),
+                         (1, 1, 1, 1, 1, 1))
+        self.assertEqual((stats["d1_returned"], stats["d7_returned"]), (0, 0))
+        await self.db._require().execute(
+            "INSERT INTO pet_daily_activity SELECT pet_id,DATE(day,'+1 day'),user_id,'care' "
+            "FROM pet_trips WHERE id=?", (trip_id,),
+        )
+        stats = await self.db.chapter_stats(CHAT_ID, day)
+        self.assertEqual((stats["d1_returned"], stats["d7_returned"]), (1, 0))
+
     async def test_private_studio_album_and_verified_equip(self):
         self.assertEqual((await self.client.get("/api/studio/1")).status,401)
         forbidden=await self.client.get("/api/studio/2",headers=self.headers)
@@ -630,9 +698,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=5", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=11", html)
-        self.assertIn("/static/studio.js?v=1", html)
-        self.assertIn("/static/studio.css?v=1", html)
+        self.assertIn("/static/app.js?v=12", html)
+        self.assertIn("/static/studio.js?v=2", html)
+        self.assertIn("/static/studio.css?v=2", html)
         self.assertIn("/static/season.js?v=1", html)
         self.assertIn("/static/season.css?v=1", html)
         self.assertIn("/static/league.js?v=1", html)

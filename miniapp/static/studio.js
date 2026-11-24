@@ -5,7 +5,7 @@
   }[c]));
   const number=v=>Math.max(0,Math.floor(Number(v)||0));
   const pct=(progress,goal)=>goal>0?Math.min(100,Math.round(number(progress)*100/number(goal))):100;
-  const FRAMES=new Set(["classic","grove","neon","atelier","champion","cosmos"]);
+  const FRAMES=new Set(["classic","grove","neon","atelier","champion","cosmos","trailkeeper"]);
   const STICKERS=new Set(["paw","compass","heart","medal","crystal","crown"]);
   function safeFrame(code){return FRAMES.has(code)?code:"classic";}
   function safeSticker(code){return STICKERS.has(code)?code:"paw";}
@@ -43,7 +43,7 @@
       '<p class="section-lead">Реальные события вашего общего питомца. '+
       'Записи сохраняются в игре и не требуют покупки.</p>'+
       (timeline||'<div class="notice">Здесь появятся ваши первые приключения.</div>')+
-      '<p class="subtitle">Показаны последние 24 события из истории питомца.</p></div>';
+      '<p class="subtitle">Здесь остаются страницы глав и последние 24 события питомца.</p></div>';
   }
   function renderStudio(data,pet,mode){
     const heading='<div class="section-heading">🎨 Студия питомца</div>'+

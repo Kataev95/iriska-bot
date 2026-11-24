@@ -5,6 +5,7 @@ cannot supply progress, purchase prices, rewards, or arbitrary CSS classes.
 """
 from dataclasses import dataclass
 
+from pet_chapter import CHAPTER_FRAME
 from pet_game import xp_for_level
 
 
@@ -23,6 +24,7 @@ FRAMES = {
     "neon": Style("🌈", "Сияние", "Достигните 5-го уровня.", "xp", xp_for_level(5)),
     "atelier": Style("🎨", "Мастерская", "Создайте первый сувенир.", "crafts", 1),
     "champion": Style("🏆", "Чемпион", "Получите один сезонный титул.", "titles", 1),
+    CHAPTER_FRAME: Style("🍂", "Хранитель тропы", "Завершите главу «Лесная тропа».", "forest_trail", 1),
     "cosmos": Style("🌌", "Космос", "Завершите 10 экспедиций.", "trips", 10),
 }
 
