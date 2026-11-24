@@ -150,6 +150,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "id": pet_id, "name": pet["name"] or species_by_code(pet["species"]).title,
         "season_title": equipped_title,
         "style": studio_style,
+        "chapter": await db.chapter_state(pet_id),
         "species": pet["species"], "stage_days": growth_days(pet),
         "image": f"/assets/pets/{current_image}.jpg",
         "partner": partner_name,
@@ -189,9 +190,15 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
 
 
 async def bootstrap(request: web.Request):
-    user_id = current_user(request)["user_id"]
-    rows = await user_pet_list(request.app["db"], user_id)
+    auth = current_user(request)
+    rows = await user_pet_list(request.app["db"], auth["user_id"])
+    start_param = auth["start_param"]
+    group = start_param.removeprefix("week_")
+    chapter_entry = start_param.startswith("week_") and group.isascii() and group.isdigit()
+    chat_id = -int(group) if chapter_entry and len(group) <= 19 else None
+    preferred_pet = next((int(p["id"]) for p in rows if p["chat_id"] == chat_id), None)
     return web.json_response({
+        "chapter_pet_id": preferred_pet,
         "pets": [
             {"id": int(p["id"]), "name": p["name"] or species_by_code(p["species"]).title,
              "species": p["species"], "streak": int(p["streak"])}
@@ -342,6 +349,12 @@ async def action(request: web.Request):
         result = await db.game_care(pet_id, uid, code, now, cfg.tz)
     elif kind == "start" and code in ROUTES:
         result = await db.start_trip(pet_id, uid, code, now, cfg.tz)
+    elif kind == "chapter_start" and code in ROUTES:
+        result = await db.start_trip(
+            pet_id, uid, code, now, cfg.tz, chapter=str(payload.get("chapter", ""))
+        )
+    elif kind in ("chapter_craft", "chapter_finish"):
+        result = await db.advance_chapter(pet_id, uid, code, kind.removeprefix("chapter_"), now, cfg.tz)
     elif kind == "claim":
         result = await db.claim_trip(pet_id, uid, int(payload["trip_id"]), now, cfg.tz)
     elif kind == "daily":

@@ -68,3 +68,11 @@
  .studio-style-item .btn{font-size:10px;padding:6px;}
  .studio-preview{height:206px;}
 }
+
+.studio-frame-trailkeeper{--studio-outline:#efba72;--studio-glow:#b773366e;}
+.studio-frame-swatch-trailkeeper{border-color:#efba72;}
+.weekly-chapter{background:linear-gradient(135deg,#394735,#283644);}
+.weekly-chapter .subtitle{color:#dce2d0;}
+.chapter-steps{padding-inline-start:23px;margin:12px 0;font-size:13px;line-height:1.9;}
+.chapter-steps [aria-current="step"]{font-weight:800;color:#ffd69e;}
+.chapter-routes{display:grid;gap:8px;}

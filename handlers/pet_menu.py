@@ -42,6 +42,7 @@ from config import Config
 from db import Database
 from handlers.common import GroupF, trig, yesterday_day
 from handlers.pets import LIST_TRIGGERS, _plain, _who, rules_text
+from pet_chapter import CHAPTER_TITLE
 from pet_care import (
     ACTIONS,
     CHAT_FOOD,
@@ -657,6 +658,50 @@ def wardrobe_keyboard(pet) -> InlineKeyboardMarkup:
 
 async def _names(db: Database, pet) -> dict:
     return await db.user_names(pet["chat_id"], [pet["user_a"], pet["user_b"]])
+
+
+@router.message(GroupF, Command("pet_week"))
+async def chapter_announcement(message: Message, db: Database, config: Config):
+    if message.from_user is None or message.from_user.id not in config.admin_ids:
+        return
+    if not config.pets_enabled or not config.miniapp_enabled:
+        await message.reply("Включите питомцев и Mini App перед публикацией.")
+        return
+    me = await message.bot.get_me()
+    chat_id = message.chat.id
+    markup = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🍂 Открыть приключение",
+                             url=main_app_link(me.username, chapter_chat_id=chat_id)),
+    ]])
+    if not await db.reserve_chapter_announcement(chat_id):
+        return
+    try:
+        await message.answer(
+            f"🍂 Приключение недели — «{CHAPTER_TITLE}»\n\n"
+            "Отправьте питомца за материалами, соберите указатель и откройте тропу. "
+            "За прохождение получите рамку и запись в альбоме.",
+            reply_markup=markup,
+        )
+    except TelegramBadRequest:
+        await db.release_chapter_announcement(chat_id)
+        raise
+
+
+@router.message(GroupF, Command("pet_week_stats"))
+async def chapter_statistics(message: Message, db: Database, config: Config):
+    if message.from_user is None or message.from_user.id not in config.admin_ids:
+        return
+    stats = await db.chapter_stats(message.chat.id, local_now(config).date().isoformat())
+    await message.reply(
+        f"🍂 «{CHAPTER_TITLE}»\n"
+        f"Начали главу — {stats['started']} питомцев\n"
+        f"Забрали добычу — {stats['first_step']}\n"
+        f"Открыли тропу — {stats['finished']}\n"
+        f"Прошли вдвоём — {stats['shared']}\n\n"
+        "Вернулись к игровому действию среди начавших поход:\n"
+        f"На следующий день — {stats['d1_returned']} из {stats['d1_total']}\n"
+        f"Через неделю — {stats['d7_returned']} из {stats['d7_total']}"
+    )
 
 
 async def send_card(message: Message, db: Database, config: Config, pet=None) -> None:

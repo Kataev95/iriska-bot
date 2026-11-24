@@ -232,7 +232,7 @@ function renderPicker() {
     safe(ui.pet?.name || "Питомцы")+' ▾</button>'+options+'</div>';
 }
 function hero(p) {
-  const frameCodes=["classic","grove","neon","atelier","champion","cosmos"];
+  const frameCodes=["classic","grove","neon","atelier","champion","cosmos","trailkeeper"];
   const stickerIcons={paw:"🐾",compass:"🧭",heart:"💞",medal:"🎯",crystal:"💎",crown:"👑"};
   const frame=frameCodes.includes(p.style?.frame)?p.style.frame:"classic";
   const sticker=stickerIcons[p.style?.sticker]||"🐾";
@@ -256,6 +256,51 @@ function hero(p) {
     '<small>'+(p.next_xp == null ? "MAX":p.next_xp+' XP')+'</small></div>'+
     '<p class="mood-caption">'+safe(p.mood||"🐾 У питомца всё хорошо")+'</p></div>';
 }
+function weeklyChapter(p) {
+  const chapter = p.chapter;
+  if (!chapter) return "";
+  const trip = p.trip;
+  let action;
+  if (chapter.stage === 3) {
+    action = '<p>✅ Тропа открыта.'+(chapter.shared?" В альбоме есть отметка о совместном походе.":"")+'</p>'+
+      '<button class="btn btn-quiet" data-click="studio">Открыть студию</button>';
+  } else if (chapter.stage === 2) {
+    action = '<button class="btn btn-primary" data-action="chapter_finish" data-code="'+safe(chapter.code)+'">Установить указатель</button>';
+  } else if (chapter.stage === 1) {
+    const material = ui.config.materials.find(item=>item.code===chapter.ingredient);
+    const stocked = resourceQuantity(p, chapter.ingredient)>0;
+    action = '<p class="subtitle">На указатель уйдёт 1 материал: '+safe(material?.name||"")+'.</p>'+
+      (stocked
+        ? '<button class="btn btn-primary" data-action="chapter_craft" data-code="'+safe(chapter.code)+'">Собрать в мастерской</button>'
+        : '<button class="btn btn-quiet" data-tab="trips">В поход за материалом</button>');
+  } else if (trip && trip.id === chapter.trip_id) {
+    const left = Math.max(0,trip.finish_at-serverNow());
+    action = left
+      ? '<p class="subtitle" data-chapter-countdown>⏳ '+duration(left)+' до возвращения</p>'
+      : '<button class="btn btn-primary" data-action="claim" data-trip="'+trip.id+'">Забрать добычу</button>';
+  } else if (trip) {
+    action = '<button class="btn btn-quiet" data-tab="trips">Открыть текущий поход</button>';
+  } else if (!p.best_streak) {
+    action = '<p class="subtitle">Приключение откроется, когда питомец вылупится.</p>';
+  } else {
+    const routes = {park:"Короткий за древесиной",ruins:"Дальний за кристаллом"};
+    action = '<div class="chapter-routes">'+ui.config.routes.filter(route=>route.code in routes).map(route=>{
+      const energy = route.energy-(p.profession==="artisan"?3:0);
+      const locked = p.trips_remaining===0 || p.food<20 || p.energy<energy;
+      return '<button class="btn btn-primary" data-action="chapter_start" data-code="'+safe(route.code)+
+        '" data-chapter="'+safe(chapter.code)+'" '+(locked?'disabled':'')+'>'+
+        safe(routes[route.code])+' · '+duration(route.seconds)+'</button>';
+    }).join("")+'</div>'+
+      '<p class="subtitle">'+(p.trips_remaining===0?"Лимит походов на сегодня исчерпан.":"Для выхода нужно 20 сытости и 10–30 энергии до бонуса профессии.")+'</p>';
+  }
+  return '<section class="panel weekly-chapter"><div class="eyebrow">ПРИКЛЮЧЕНИЕ НЕДЕЛИ</div>'+
+    '<h2 class="h2">🍂 '+safe(chapter.title)+'</h2>'+
+    '<p class="subtitle">Помогите питомцу открыть старую тропу. Награда — рамка «Хранитель тропы» и запись в альбоме.</p>'+
+    '<ol class="chapter-steps" aria-label="Ход приключения">'+
+    ["Добыть материал","Собрать указатель","Открыть тропу"].map((label,index)=>
+      '<li '+(index===chapter.stage?'aria-current="step"':'')+'>'+(index<chapter.stage?'✅ ':'')+label+'</li>').join("")+
+    '</ol>'+action+'</section>';
+}
 function home(p) {
   const actions = ui.config.actions.map(action => {
     const state = p.care_state?.[action.code] || {};
@@ -267,7 +312,7 @@ function home(p) {
       (disabled?'disabled ':'')+'title="'+safe(state.blocked_reason||hint)+'">'+
       '<span>'+safe(action.name)+'</span><small>'+(disabled?safe(hint):'✓ Готово')+'</small></button>';
   }).join("");
-  return hero(p)+'<div class="panel"><div class="eyebrow">ЕЖЕДНЕВНЫЙ УХОД</div>'+
+  return weeklyChapter(p)+hero(p)+'<div class="panel"><div class="eyebrow">ЕЖЕДНЕВНЫЙ УХОД</div>'+
     '<h2 class="h2">Позаботьтесь о '+safe(p.name)+'</h2>'+
     '<div class="buttons">'+actions+'</div></div>'+
     '<div class="notice">'+(p.today_fed
@@ -666,6 +711,12 @@ function syncTimers() {
     }
   }
   if (ui.tab === "home") {
+    const countdown = app.querySelector("[data-chapter-countdown]");
+    if (countdown && ui.pet.trip) {
+      const left = ui.pet.trip.finish_at-serverNow();
+      if (left<=0) render();
+      else countdown.textContent = "⏳ "+duration(left)+" до возвращения";
+    }
     for (const btn of app.querySelectorAll('[data-action="care"]')) {
       const info = ui.pet.care_state?.[btn.dataset.code];
       if (!info) continue;
@@ -706,7 +757,7 @@ async function perform(kind, code="", extra={}) {
       if(kind.startsWith("season_")) {
         ++ui.seasonRequest; ui.season=null; ui.seasonFetchedAt=0;
       }
-      if(kind==="studio_equip") {
+      if(kind==="studio_equip" || kind==="chapter_finish") {
         ++ui.studioRequest; ui.studio=null; ui.studioFetchedAt=0;
       }
       setPet(result.pet);
@@ -945,9 +996,12 @@ document.addEventListener("click", async e=>{
   if(target.dataset.action) {
     const kind=target.dataset.action,code=target.dataset.code||"";
     const handler=()=>perform(kind,code,
-      kind==="claim"?{trip_id:Number(target.dataset.trip)}:{});
-    if(kind==="start")confirmDialog("Отправить питомца в поход?",
+      kind==="claim"?{trip_id:Number(target.dataset.trip)}:
+      kind==="chapter_start"?{chapter:target.dataset.chapter}:{});
+    if(kind==="start" || kind==="chapter_start")confirmDialog("Отправить питомца в поход?",
       "Поход потратит сытость и энергию. Награда ждёт возвращения.",handler);
+    else if(kind==="chapter_craft") confirmDialog(
+      "Собрать указатель?", "Один материал спишется из общего рюкзака.", handler);
     else handler();
   }
 });
@@ -965,7 +1019,7 @@ async function boot() {
       return;
     }
     const started=(TG.initDataUnsafe?.start_param||"").match(/^p_(\d+)$/);
-    let id=started?Number(started[1]):ui.pets[0].id;
+    let id=started?Number(started[1]):ui.config.chapter_pet_id??ui.pets[0].id;
     if(!ui.pets.some(p=>p.id===id)) id=ui.pets[0].id;
     await loadPet(id);
   } catch(e) {

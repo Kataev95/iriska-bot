@@ -50,10 +50,14 @@ def validate_init_data(raw: str, token: str, *, now: float | None = None,
         raise Unauthorized("Неверные данные Telegram") from exc
 
 
-def main_app_link(username: str, pet_id: int | None = None) -> str:
+def main_app_link(username: str, pet_id: int | None = None, *, chapter_chat_id: int | None = None) -> str:
     """Telegram deep link: works in groups, unlike WebAppInfo inline buttons."""
     if not username or not username.replace("_", "").isalnum():
         raise ValueError("Неверное имя Telegram-бота")
+    if chapter_chat_id is not None:
+        if pet_id is not None or chapter_chat_id >= 0:
+            raise ValueError("Неверный чат приключения")
+        return f"https://t.me/{username}?startapp=week_{-chapter_chat_id}"
     if pet_id is None:
         return f"https://t.me/{username}?startapp"
     if pet_id <= 0:

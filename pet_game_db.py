@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from pet_chapter import CHAPTER_CODE, CHAPTER_ROUTES
 from pet_care import (
     ACTIONS,
     FREEZE_MAX,
@@ -46,6 +47,17 @@ class PetGameDatabase(PetBusinessDatabase):
             CREATE UNIQUE INDEX IF NOT EXISTS pet_trip_active ON pet_trips(pet_id)
                 WHERE claimed_at IS NULL;
             CREATE INDEX IF NOT EXISTS pet_trip_daily ON pet_trips(user_id, day);
+            CREATE TABLE IF NOT EXISTS pet_chapters (
+                pet_id INTEGER NOT NULL, chapter TEXT NOT NULL,
+                trip_id INTEGER NOT NULL UNIQUE, claimed_by INTEGER,
+                crafted_at REAL, crafted_by INTEGER,
+                finished_at REAL, finished_by INTEGER, shared INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(pet_id, chapter)
+            );
+            CREATE TABLE IF NOT EXISTS pet_chapter_announcements (
+                chat_id INTEGER NOT NULL, chapter TEXT NOT NULL,
+                PRIMARY KEY(chat_id, chapter)
+            );
             CREATE TABLE IF NOT EXISTS pet_daily_activity (
                 pet_id INTEGER NOT NULL, day TEXT NOT NULL, user_id INTEGER NOT NULL,
                 kind TEXT NOT NULL, PRIMARY KEY(pet_id, day, user_id, kind)
@@ -311,14 +323,20 @@ class PetGameDatabase(PetBusinessDatabase):
             )
             return True
 
-    async def start_trip(self, pet_id, user_id, route, now, tz):
+    async def start_trip(self, pet_id, user_id, route, now, tz, *, chapter=None):
         if route not in ROUTES:
             return "Неизвестный маршрут"
+        if chapter is not None and (chapter != CHAPTER_CODE or route not in CHAPTER_ROUTES):
+            return "Этот маршрут не входит в главу"
         r = ROUTES[route]
         async with self._game_transaction() as db:
             pet = await self._game_pet(db, pet_id, user_id)
             if pet is None or not pet["best_streak"]:
                 return "Сначала питомец должен вылупиться"
+            if chapter and await (await db.execute(
+                "SELECT 1 FROM pet_chapters WHERE pet_id=? AND chapter=?", (pet_id, chapter)
+            )).fetchone():
+                return "Вы уже выбрали маршрут этой главы"
             if await (
                 await db.execute(
                     "SELECT id FROM pet_trips WHERE pet_id=? AND claimed_at IS NULL",
@@ -347,10 +365,15 @@ class PetGameDatabase(PetBusinessDatabase):
                 "UPDATE pets SET food=food-5,energy=energy-? WHERE id=?",
                 (energy, pet_id),
             )
-            await db.execute(
+            cursor = await db.execute(
                 "INSERT INTO pet_trips(pet_id,user_id,day,route,started_at,finish_at,xp,coins) VALUES(?,?,?,?,?,?,?,?)",
                 (pet_id, user_id, day, route, now, now + r.seconds, xp, coins),
             )
+            if chapter:
+                await db.execute(
+                    "INSERT INTO pet_chapters(pet_id,chapter,trip_id) VALUES(?,?,?)",
+                    (pet_id, chapter, cursor.lastrowid),
+                )
             return "✅ Питомец отправился в путь! Награда будет ждать вас"
 
     async def active_trip(self, pet_id):
@@ -377,6 +400,10 @@ class PetGameDatabase(PetBusinessDatabase):
                 return "Поход ещё не закончен"
             await db.execute(
                 "UPDATE pet_trips SET claimed_at=? WHERE id=?", (now, trip_id)
+            )
+            await db.execute(
+                "UPDATE pet_chapters SET claimed_by=? WHERE pet_id=? AND trip_id=?",
+                (user_id, pet_id, trip_id),
             )
             await db.execute("UPDATE pets SET xp=xp+? WHERE id=?", (trip["xp"], pet_id))
             await db.execute(
