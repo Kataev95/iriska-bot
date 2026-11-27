@@ -39,17 +39,20 @@ class PetProgressionDatabase(PetArcadeDatabase):
         return effects(pet,ranks,spec)
 
     async def progression_state(self, pet):
-        async with self._game_transaction() as db:
-            ranks,spec=await self._progression_choices(db,pet["id"])
-            rows=await (await db.execute(
-                "SELECT level FROM pet_level_claims WHERE pet_id=? ORDER BY level",(pet["id"],)
-            )).fetchall()
-            level=level_for(pet["xp"])
-            return {"skills":ranks,"specialization":spec,
-                    "points":max(0,skill_points(level)-sum(ranks.values())),
-                    "earned_points":skill_points(level),
-                    "claimed":[r["level"] for r in rows],
-                    "evolution":evolution(pet),"effects":effects(pet,ranks,spec)}
+        async with self._game_read() as db:
+            return await self._progression_state(db, pet)
+
+    async def _progression_state(self, db, pet):
+        ranks,spec=await self._progression_choices(db,pet["id"])
+        rows=await (await db.execute(
+            "SELECT level FROM pet_level_claims WHERE pet_id=? ORDER BY level",(pet["id"],)
+        )).fetchall()
+        level=level_for(pet["xp"])
+        return {"skills":ranks,"specialization":spec,
+                "points":max(0,skill_points(level)-sum(ranks.values())),
+                "earned_points":skill_points(level),
+                "claimed":[r["level"] for r in rows],
+                "evolution":evolution(pet),"effects":effects(pet,ranks,spec)}
 
     async def learn_skill(self, pet_id,user_id,code,expected_rank):
         if code not in SKILLS or type(expected_rank) is not int:
