@@ -24,6 +24,8 @@ class PetArcadeDatabase(PetCountrysideDatabase):
                 ON pet_arcade_runs(pet_id) WHERE finished_at IS NULL;
             CREATE INDEX IF NOT EXISTS idx_arcade_day ON pet_arcade_runs(pet_id,day,game);
             CREATE INDEX IF NOT EXISTS idx_arcade_best ON pet_arcade_runs(pet_id,game,score);
+            CREATE INDEX IF NOT EXISTS idx_arcade_last ON pet_arcade_runs(pet_id,id DESC);
+            CREATE INDEX IF NOT EXISTS idx_arcade_reward_day ON pet_arcade_runs(pet_id,finished_at) WHERE reward_xp>0;
         """)
 
     async def _arcade_state(self, db, pet_id, user_id, now, tz):
@@ -66,7 +68,7 @@ class PetArcadeDatabase(PetCountrysideDatabase):
                 "last_id":last["id"] if last else 0,"active":active,"result":result}
 
     async def arcade_state(self,pet_id,user_id,now,tz):
-        async with self._game_transaction() as db:
+        async with self._game_read() as db:
             pet=await self._game_pet(db,pet_id,user_id)
             if pet is None:return None
             return await self._arcade_state(db,pet_id,user_id,now,tz)
