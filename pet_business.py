@@ -50,3 +50,19 @@ BUSINESSES = {
         (("wood", 4), ("stone", 1)), 30 * 60, (2, 3),
     ),
 }
+
+
+# Tycoon uses existing batches and sales, never a second currency.
+TYCOON_TAP_COOLDOWN = 0.75
+TYCOON_MAX_TAPS = 30
+TYCOON_TAP_SECONDS = (60, 90)  # equipment level 1 / 2
+TYCOON_ORDER_QUANTITY = 2
+TYCOON_WORKER_COSTS = {
+    "florist": ((("leaf", 5), ("wood", 3)), (("leaf", 8), ("wood", 5), ("stone", 2))),
+    "carpenter": ((("wood", 5), ("stone", 2)), (("wood", 8), ("stone", 4), ("crystal", 1))),
+}
+TYCOON_WORKER_PERCENT = (100, 75, 50)
+
+
+def production_duration(code: str, workers: int) -> int:
+    return BUSINESSES[code].production_seconds * TYCOON_WORKER_PERCENT[workers] // 100
