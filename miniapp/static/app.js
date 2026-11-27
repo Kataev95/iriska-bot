@@ -705,7 +705,7 @@ function render() {
 }
 function patchHome(selector,markup){
   const node=app.querySelector(selector);
-  if(node.dataset.markup===markup)return;
+  if(!node||node.dataset.markup===markup)return;
   node.innerHTML=markup;
   node.dataset.markup=markup;
 }
@@ -906,8 +906,6 @@ function syncTimers() {
     }
     loadMarket();
   }
-  if(ui.tab==="business") syncTycoon();
-  if(ui.tab==="world") syncWorldMap();
   if (ui.tab === "trips" && ui.pet.trip) {
     const remaining = Math.max(0, ui.pet.trip.finish_at - serverNow());
     const label = app.querySelector("[data-trip-countdown]");
@@ -1139,7 +1137,8 @@ async function performArcade(action,game="",move=null){
 }
 
 async function perform(kind, code="", extra={}) {
-  if (ui.busy||motionHidden()||!online()) return;
+  if (ui.busy||motionHidden()) return;
+  if(!online()){showToast("Нет подключения к интернету");return;}
   const id = ui.selected;
   let refresh=false;
   ui.busy = true;
@@ -1151,17 +1150,17 @@ async function perform(kind, code="", extra={}) {
     const before = ui.pet;
     const result = await api('/api/action', {pet_id:id,kind,code,...extra});
     if (ui.selected === id) {
-      ++ui.leagueRequest; ui.league=null; ui.leagueFetchedAt=0;
+      ++ui.leagueRequest; ui.league=null; ui.leagueLoading=false; ui.leagueFetchedAt=0;
       if(kind.startsWith("season_")) {
-        ++ui.seasonRequest; ui.season=null; ui.seasonFetchedAt=0;
+        ++ui.seasonRequest; ui.season=null; ui.seasonLoading=false; ui.seasonFetchedAt=0;
       }
       if(kind==="studio_equip" || kind==="chapter_finish") {
-        ++ui.studioRequest; ui.studio=null; ui.studioFetchedAt=0;
+        ++ui.studioRequest; ui.studio=null; ui.studioLoading=false; ui.studioFetchedAt=0;
       }
       setPet(result.pet);
       showActionEffect(kind, code, before, result.pet, result.message);
       if(kind.startsWith("market_")) {
-        ui.market=null;ui.marketFetchedAt=0;
+        ++ui.marketRequest;ui.market=null;ui.marketLoading=false;ui.marketFetchedAt=0;
         await loadMarket({force:true,quiet:false});
       }
       if(kind.startsWith("season_")) await loadSeason({force:true,quiet:false});
@@ -1177,12 +1176,16 @@ async function perform(kind, code="", extra={}) {
     ui.busy = false;
     app.classList.remove("is-busy");
     wakeScheduler();
-    if(refresh)await refreshPet({force:true});
+    if(refresh){
+      ui.lastSync=0;nextFull=0;
+      await refreshPet({force:true});
+    }
   }
 }
 document.addEventListener("click", async e=>{
   const target=e.target.closest("button");if(!target||target.disabled) return;
   if(ui.busy)return;
+  if(!modal.classList.contains("hidden")&&!modal.contains(target))return;
   if (target.dataset.root) {tap();goToTab(target.dataset.root,true);return;}
   if (target.dataset.tab) {tap();goToTab(target.dataset.tab);return;}
   if (target.dataset.mapLocation) {selectWorldLocation(target.dataset.mapLocation);return;}
@@ -1570,11 +1573,12 @@ function tick(){
   }
   if(!online())return;
   if(lastFeature!==feature){lastFeature=feature;nextFeature=now+(cadence.feature||15000);}
-  if(now>=nextFull){
+  else if(cadence.feature!==null){nextFeature=Math.min(nextFeature,now+cadence.feature);}
+  if(now>=nextFull&&!ui.syncing){
     nextFull=now+15000;
     refreshPet();
   }
-  if(cadence.feature!==null&&now>=nextFeature){
+  if(cadence.feature!==null&&now>=nextFeature&&!ui.syncing){
     nextFeature=now+cadence.feature;
     if(ui.tab==="arcade")refreshArcade();
     else refreshCountryside();
