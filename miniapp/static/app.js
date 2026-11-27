@@ -38,6 +38,11 @@ const navigation = window.PetsNavigation.create();
 const tabs = window.PetsNavigation.tabs;
 const design = window.PetsWorldUI;
 const icon = design.icon;
+const life = window.PetsLife;
+const reactionGate = life.createGate();
+let reactionTimer = null;
+let inactive = false;
+const motionHidden = () => document.hidden || inactive;
 const emoji = {food:"🍪",wear:"🎀",freeze:"🧊",house:"🏠"};
 const resourceQuantity = (p, code) => Math.max(0,Number(p.materials?.[code] || 0));
 const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
@@ -94,7 +99,7 @@ const effects = document.getElementById("effects");
 const careSymbols = {feed:"🍖",play:"🎾",sleep:"💤"};
 let effectTimer = null;
 function playEffect(label, type="sparkle") {
-  if (document.hidden || !effects) return;
+  if (motionHidden() || !effects) return;
   effects.replaceChildren();
   const card = document.createElement("div");
   card.className = "effect-card effect-"+type;
@@ -115,29 +120,75 @@ function playEffect(label, type="sparkle") {
   clearTimeout(effectTimer);
   effectTimer = setTimeout(() => effects.replaceChildren(), 1900);
 }
+function clearPetReaction() {
+  clearTimeout(reactionTimer);
+  reactionTimer=null;
+  reactionGate.reset();
+  const scene=app.querySelector(".pet-scene");
+  if(!scene)return;
+  delete scene.dataset.reaction;
+  scene.querySelector(".pet-expression")?.remove();
+  const layer=scene.querySelector(".pet-reaction-layer");
+  if(layer)layer.replaceChildren();
+  const speech=scene.querySelector(".pet-speech");
+  if(speech)speech.textContent="";
+}
+function reactPet(p, kind, confirmed=false) {
+  if(!p||motionHidden()||ui.tab!=="home"||ui.pet?.id!==p.id)return false;
+  const scene=app.querySelector(".pet-scene");
+  if(!scene)return false;
+  const reaction=life.reaction(p,kind,confirmed);
+  if(!reaction)return false;
+  const token=reactionGate.begin(p.id,Date.now(),reaction.ms,confirmed);
+  if(token===null)return false;
+  clearTimeout(reactionTimer);
+  scene.querySelector(".pet-expression")?.remove();
+  scene.dataset.reaction=reaction.motion;
+  const layer=scene.querySelector(".pet-reaction-layer");
+  const speech=scene.querySelector(".pet-speech");
+  if(speech)speech.textContent=reaction.text;
+  if(layer){
+    const prop=document.createElement("span");
+    prop.className="pet-reaction-prop";
+    prop.textContent=reaction.symbol;
+    layer.replaceChildren(prop);
+  }
+  const path=life.expressionPath(p,reaction.expression);
+  const reduced=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if(path&&path!==p.image&&!reduced){
+    const img=new Image();
+    img.className="pet-expression";
+    img.alt="";
+    img.setAttribute("aria-hidden","true");
+    img.onload=()=>{
+      if(reactionGate.current(token,p.id)&&!motionHidden()&&scene.isConnected){
+        scene.querySelector(".pet-motion")?.append(img);
+      }
+    };
+    // Broken/missing assets leave the authoritative portrait untouched.
+    img.src=path;
+  }
+  reactionTimer=setTimeout(()=>{
+    if(reactionGate.finish(token))clearPetReaction();
+  },reaction.ms);
+  return true;
+}
 function petGreeting() {
-  const pet = ui.pet;
-  if (!pet || ui.busy) return;
-  haptic("soft");
-  playEffect("💚 "+pet.name+" рад встрече!", "greeting");
-  const hero = app.querySelector(".hero");
-  if (!hero) return;
-  hero.classList.remove("pet-waving");
-  // Restart the short CSS animation for another intentional tap.
-  void hero.offsetWidth;
-  hero.classList.add("pet-waving");
-  setTimeout(() => hero.classList.remove("pet-waving"), 700);
+  if(!ui.pet||ui.busy)return;
+  if(reactPet(ui.pet,"pat"))haptic("soft");
 }
 function showActionEffect(kind, code, before, after, message) {
   if (!before || !after || before.id !== after.id) return;
+  const careConfirmed=kind==="care"&&(message.startsWith("✅")||message.startsWith("💕"));
+  const localCare=careConfirmed&&reactPet(after,code,true);
   if (after.level > before.level) {
     playEffect("🎉 Новый уровень! "+after.level+" / 20", "level");
     haptic("success");
     return;
   }
   // Announce only changes confirmed in the authoritative DB snapshot.
-  if (kind === "care" && (message.startsWith("✅") || message.startsWith("💕"))) {
-    playEffect((careSymbols[code]||"💗")+" "+after.name+" доволен!", "care");
+  if (careConfirmed) {
+    if(!localCare)playEffect((careSymbols[code]||"💗")+" Уход выполнен", "care");
     return;
   }
   if (kind === "buy" && after.balance < before.balance) {
@@ -233,21 +284,27 @@ function hero(p) {
   const stickerIcons={paw:"🐾",compass:"🧭",heart:"💞",medal:"🎯",crystal:"💎",crown:"👑"};
   const frame=frameCodes.includes(p.style?.frame)?p.style.frame:"classic";
   const sticker=stickerIcons[p.style?.sticker]||"🐾";
-  const target=p.next_xp??p.xp;
-  const prior=Number.isFinite(p.level_start_xp)?p.level_start_xp:25*p.level*(p.level-1);
-  const progress=p.next_xp==null?100:design.percent((p.xp-prior)/Math.max(1,target-prior)*100);
   const phase=design.phase(p.world_hour);
-  return '<section class="hero pet-scene phase-'+phase+'" aria-label="Долина питомца">'+design.landscape()+
+  const pose=life.pose(p), state=life.state(p);
+  return '<section class="hero pet-scene phase-'+phase+' pose-'+pose+'" data-pet-id="'+p.id+'" aria-label="Долина питомца">'+design.landscape()+
     '<div class="scene-top"><span class="scene-badge">'+icon(phase==="night"?"sleep":"sun")+
     safe(design.phaseLabel(p.world_hour))+'</span><span class="scene-badge scene-level">'+icon("star")+
     'Ур. '+p.level+' / 20</span></div>'+
     '<div class="pet-portrait studio-frame studio-frame-'+frame+'">'+
-    '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'" decoding="async" fetchpriority="high">'+
+    '<div class="pet-motion"><img class="pet-art" src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'" decoding="async" fetchpriority="high"></div>'+
     '<span class="studio-hero-sticker" aria-hidden="true">'+sticker+'</span>'+
     '<button type="button" class="pet-touch" data-click="pet-greet" aria-label="Поздороваться с питомцем — визуальный эффект, без затрат ирисок">'+
-    '<span class="pet-hint" aria-hidden="true">Погладить ✨</span></button></div>'+
-    '<div class="scene-caption">'+icon("paw")+' Ваш маленький мир</div></section>'+
-    '<section class="panel pet-dashboard"><div class="pet-identity"><div class="pet-identity-main">'+
+    '<span class="pet-hint" aria-hidden="true">'+safe(state.hint)+' ✨</span></button></div>'+
+    '<div class="pet-idle-prop" aria-hidden="true">'+state.symbol+'</div>'+
+    '<div class="pet-reaction-layer" aria-hidden="true"></div>'+
+    '<div class="pet-speech" role="status" aria-live="polite"></div>'+
+    '<div class="scene-caption">'+icon("paw")+' '+safe(state.label)+'</div></section>';
+}
+function petDashboard(p){
+  const target=p.next_xp??p.xp;
+  const prior=Number.isFinite(p.level_start_xp)?p.level_start_xp:25*p.level*(p.level-1);
+  const progress=p.next_xp==null?100:design.percent((p.xp-prior)/Math.max(1,target-prior)*100);
+  return '<section class="panel pet-dashboard"><div class="pet-identity"><div class="pet-identity-main">'+
     '<div class="hero-title">'+safe(p.name)+'</div><div class="pet-partner">'+icon("heart")+
     'Вместе с '+safe(p.partner)+'</div>'+
     (p.season_title?'<div class="chip chip-purple season-name-tag">'+safe(p.season_title)+'</div>':'')+
@@ -257,7 +314,7 @@ function hero(p) {
     '<div class="xp-hud"><b>'+icon("star")+p.xp+' XP</b><small>'+
     (p.next_xp==null?"Макс. уровень":"До следующего: "+Math.max(0,target-p.xp)+' XP')+'</small>'+
     '<progress class="game-progress" max="100" value="'+progress+'" aria-label="Опыт текущего уровня">'+progress+'%</progress></div>'+
-    '<p class="mood-caption">'+safe(p.mood||"У питомца всё хорошо")+'</p></section>';
+    '<p class="mood-caption">'+safe(life.pose(p)==="egg"?life.state(p).idle:p.mood||"У питомца всё хорошо")+'</p></section>';
 }
 function weeklyChapter(p) {
   const chapter = p.chapter;
@@ -317,7 +374,7 @@ function home(p) {
     '<span class="care-name">'+safe(({feed:"Покормить",play:"Поиграть",sleep:"Уложить"})[action.code]||action.name)+'</span>'+
     '<small>'+(disabled?safe(hint):'Готово')+'</small></button>';
   }).join("");
-  return hero(p)+'<section class="care-dock"><div class="care-dock-title"><strong>Ежедневный уход</strong><small>Забота для двоих</small></div>'+
+  return petDashboard(p)+'<section class="care-dock"><div class="care-dock-title"><strong>Ежедневный уход</strong><small>Забота для двоих</small></div>'+
     '<div class="buttons">'+actions+'</div></section>'+
     '<div class="pair-status'+(p.today_fed?' pair-complete':'')+'">'+icon(p.today_fed?"check":"heart")+
     '<span>'+(p.today_fed?"Сегодня вы уже поддержали серию!":
@@ -549,8 +606,28 @@ function render() {
     (navigation.activeRoot()===id?'active':'')+'" data-root="'+id+'"'+
     (navigation.activeRoot()===id?' aria-current="page"':'')+'><span class="nav-symbol">'+design.routeIcon(id)+'</span>'+label+'</button>').join("");
   if(nav.dataset.rendered!==navMarkup){nav.innerHTML=navMarkup;nav.dataset.rendered=navMarkup;}
-  app.innerHTML='<div class="game-tools">'+renderPicker()+(ui.tab==="inventory"?"":quickAccess())+'</div>'+({
-    home,profile,world,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
+  const tools='<div class="game-tools">'+renderPicker()+(ui.tab==="inventory"?"":quickAccess())+'</div>';
+  if(ui.tab==="home"){
+    // Keep an unchanged scene mounted: routine snapshots must not interrupt
+    // breathing, clouds, keyboard focus on the pet, or an active reaction.
+    if(!app.querySelector("[data-home-scene]")){
+      clearPetReaction();
+      app.innerHTML='<div data-home-tools></div><div data-home-scene></div><div data-home-body></div>';
+    }
+    const scene=app.querySelector("[data-home-scene]");
+    const sceneMarkup=hero(p);
+    if(scene.dataset.markup!==sceneMarkup){
+      clearPetReaction();
+      scene.innerHTML=sceneMarkup;
+      scene.dataset.markup=sceneMarkup;
+    }
+    patchHome("[data-home-tools]",tools);
+    patchHome("[data-home-body]",home(p));
+    return;
+  }
+  clearPetReaction();
+  app.innerHTML=tools+({
+    profile,world,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow()),
     market: p => window.PetsMarket.renderMarket(
@@ -559,6 +636,12 @@ function render() {
     season: p => window.PetsSeason.renderSeason(ui.season,p,serverNow()),
     studio: p => window.PetsStudio.renderStudio(ui.studio,p,ui.studioMode)
   }[ui.tab]||home)(p);
+}
+function patchHome(selector,markup){
+  const node=app.querySelector(selector);
+  if(node.dataset.markup===markup)return;
+  node.innerHTML=markup;
+  node.dataset.markup=markup;
 }
 function setPet(snapshot) {
   ui.pet = snapshot;
@@ -586,7 +669,7 @@ async function loadPet(id) {
   } finally {ui.syncing = false;}
 }
 async function refreshPet({force=false,quiet=true} = {}) {
-  if (!ui.selected || !TG?.initData || ui.busy || ui.syncing || document.hidden ||
+  if (!ui.selected || !TG?.initData || ui.busy || ui.syncing || motionHidden() ||
       !modal.classList.contains("hidden")) return;
   if (!force && Date.now()-ui.lastSync < 55000) return;
   const id = ui.selected, serial = ++ui.syncSerial;
@@ -1056,9 +1139,17 @@ async function boot() {
   }
 }
 // Refresh shared pet state when returning from another Telegram tab / chat.
-try { TG?.onEvent?.("activated", () => refreshPet({force:true})); } catch {}
+try {
+  TG?.onEvent?.("activated", () => {inactive=false;syncMotion();refreshPet({force:true});});
+  TG?.onEvent?.("deactivated", () => {inactive=true;syncMotion();});
+} catch {}
 function syncMotion() {
-  document.documentElement.classList.toggle("motion-paused",document.hidden);
+  document.documentElement.classList.toggle("motion-paused",motionHidden());
+  if(motionHidden()){
+    clearPetReaction();
+    clearTimeout(effectTimer);
+    effects?.replaceChildren();
+  }
 }
 syncMotion();
 document.addEventListener("visibilitychange", () => {
@@ -1074,7 +1165,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
 window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
 setInterval(() => {
-  if(document.hidden) return;
+  if(motionHidden()) return;
   syncTimers();
   refreshPet();
 }, 15000);

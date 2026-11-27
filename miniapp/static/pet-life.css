@@ -1,0 +1,55 @@
+/* Stage 3 — a light 2D portrait actor with local, bounded reactions.
+   Static original art remains the source of truth; no facial rig is assumed. */
+.pet-scene .pet-motion{position:absolute;inset:0;transform-origin:50% 80%;animation:pet-breathe 4.8s ease-in-out infinite}
+.pet-scene .pet-motion img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;transition:none}
+.pet-scene .pet-expression{z-index:1;animation:pet-expression-in .22s ease-out both}
+.pet-scene.pose-egg .pet-motion{animation:egg-rock 5.5s ease-in-out infinite;transform-origin:50% 86%}
+.pet-scene.pose-sleep .pet-motion{animation:pet-snooze 6s ease-in-out infinite}
+.pet-scene.pose-hungry .pet-motion,.pet-scene.pose-bored .pet-motion{animation-duration:6s}
+.pet-scene.pose-happy .pet-motion{animation-duration:3.8s}
+.pet-idle-prop{position:absolute;top:57%;right:5%;z-index:2;width:37px;height:37px;display:grid;place-items:center;
+  border-radius:14px;border:1px solid #fff0c080;background:#193b32df;font-size:20px;box-shadow:0 4px 0 #183a3155;
+  animation:pet-idle-float 4s ease-in-out infinite;pointer-events:none}
+.pose-sleep .pet-idle-prop{animation:pet-zzz 4s ease-in-out infinite}
+.pose-egg .pet-idle-prop{animation-duration:5.5s}
+.pet-reaction-layer{position:absolute;inset:0;z-index:4;pointer-events:none;overflow:hidden}
+.pet-reaction-prop{position:absolute;right:9%;bottom:22%;font-size:35px;line-height:1;filter:drop-shadow(0 3px 3px #14282060);
+  animation:pet-pop 1.65s ease-in-out both}
+.pet-speech{position:absolute;z-index:5;left:50%;top:48px;transform:translateX(-50%);max-width:85%;width:max-content;
+  padding:8px 11px;background:#fcf4da;color:#30462e;border:1px solid #fff2cc;border-radius:14px;
+  font-size:12px;line-height:1.35;font-weight:800;text-align:center;box-shadow:0 4px 12px #112c2755;pointer-events:none}
+.pet-speech:empty{display:none}
+.pet-speech:not(:empty){animation:pet-speech-in .22s ease-out both}
+.pet-scene[data-reaction] .pet-idle-prop{visibility:hidden}
+.pet-scene[data-reaction="pat"] .pet-motion{animation:pet-pat 1.6s ease-in-out both}
+.pet-scene[data-reaction="egg"] .pet-motion{animation:pet-egg-greet 1.5s ease-in-out both}
+.pet-scene[data-reaction="quiet"] .pet-motion{animation:pet-snooze 6s ease-in-out infinite}
+.pet-scene[data-reaction="feed"] .pet-motion{animation:pet-feed 1.8s ease-in-out both}
+.pet-scene[data-reaction="play"] .pet-motion{animation:pet-play 1.8s ease-in-out both}
+.pet-scene[data-reaction="sleep"] .pet-motion{animation:pet-settle 2s ease-in-out both}
+.pet-scene[data-reaction="feed"] .pet-reaction-prop{animation:pet-food 1.8s ease-in-out both}
+.pet-scene[data-reaction="play"] .pet-reaction-prop{animation:pet-ball 1.8s ease-in-out both}
+.pet-scene[data-reaction="sleep"] .pet-reaction-prop,.pet-scene[data-reaction="quiet"] .pet-reaction-prop{animation:pet-zzz-once 1.5s ease-in-out both}
+@keyframes pet-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.015,1.025)}}
+@keyframes pet-snooze{0%,100%{transform:scale(1)}50%{transform:scale(1.018,1.012)}}
+@keyframes egg-rock{0%,68%,100%{transform:rotate(0)}78%{transform:rotate(-1.5deg)}88%{transform:rotate(1.5deg)}}
+@keyframes pet-idle-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes pet-zzz{0%,100%{opacity:.55;transform:translateY(2px)}50%{opacity:1;transform:translateY(-7px)}}
+@keyframes pet-expression-in{from{opacity:0}to{opacity:1}}
+@keyframes pet-speech-in{from{opacity:0;transform:translate(-50%,5px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes pet-pat{0%,100%{transform:scale(1)}22%{transform:scale(1.04) rotate(-1deg)}46%{transform:scale(1.015) rotate(1deg)}68%{transform:scale(1.025)}}
+@keyframes pet-egg-greet{0%,100%{transform:rotate(0)}22%,58%{transform:rotate(-2.2deg)}40%,76%{transform:rotate(2.2deg)}}
+@keyframes pet-feed{0%,100%{transform:scale(1)}20%,45%,70%{transform:scale(1.035,.99)}32%,57%,82%{transform:scale(1.01,1.035)}}
+@keyframes pet-play{0%,100%{transform:translateY(0)}20%,60%{transform:translateY(-5px) scale(1.035)}40%,80%{transform:translateY(0) scale(1.015,.985)}}
+@keyframes pet-settle{0%,100%{transform:scale(1)}35%,75%{transform:scale(1.015,.985)}55%{transform:scale(1.005,1.015)}}
+@keyframes pet-pop{0%{opacity:0;transform:translateY(12px) scale(.5)}20%,65%{opacity:1;transform:translateY(-8px) scale(1)}100%{opacity:0;transform:translateY(-28px) scale(1.1)}}
+@keyframes pet-food{0%{opacity:0;transform:translate(12px,12px) scale(.6)}20%{opacity:1;transform:translate(0,0) scale(1)}75%{opacity:1;transform:translate(-22px,-12px) scale(.75)}100%{opacity:0;transform:translate(-35px,-18px) scale(.4)}}
+@keyframes pet-ball{0%{opacity:0;transform:translateY(10px) scale(.6)}15%,55%{opacity:1;transform:translateY(-30px) rotate(25deg)}35%,75%{opacity:1;transform:translateY(2px) rotate(-25deg)}100%{opacity:0;transform:translateY(15px)}}
+@keyframes pet-zzz-once{0%{opacity:0;transform:translateY(12px)}25%,60%{opacity:1;transform:translateY(-6px)}100%{opacity:0;transform:translateY(-35px)}}
+@media(max-width:360px){.pet-idle-prop{right:3%;width:30px;height:30px;font-size:17px}.pet-reaction-prop{right:5%;font-size:28px}.pet-speech{font-size:11px;top:45px}}
+@media(prefers-reduced-motion:reduce){
+  .pet-scene .pet-motion,.pet-scene .pet-expression,.pet-scene .pet-idle-prop,
+  .pet-scene .pet-reaction-prop,.pet-scene .pet-speech{animation:none!important;transform:none}
+  .pet-scene .pet-speech{transform:translateX(-50%)}
+  .pet-scene .pet-expression{display:none}
+}
