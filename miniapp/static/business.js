@@ -92,8 +92,8 @@
     const orderQty=n(rules.order_quantity||2), orderCoins=orderQty*n(b.sell_price);
     const warehouse='<section class="panel tycoon-warehouse"><div class="row"><strong>📦 Общий склад</strong><span class="chip chip-green">'+qty+' шт.</span></div>'+
       '<p class="subtitle">'+esc(b.good_icon)+' '+esc(b.good_title)+' · '+n(b.sell_price)+' 🍬 / шт.</p>'+
-      '<div class="tycoon-order"><div><div class="eyebrow">ЗАКАЗ ПОКУПАТЕЛЯ</div><strong>'+orderQty+' × '+esc(b.good_title)+'</strong><small>Оплата: '+orderCoins+' 🍬</small></div>'+
-      '<button class="btn btn-primary" data-tycoon-order="'+esc(b.code)+'" '+(sellable<orderQty?'disabled ':'')+'>Сдать заказ</button></div>'+
+      '<div class="tycoon-order"><div><div class="eyebrow">ЗАКАЗ ДНЯ</div><strong>'+orderQty+' × '+esc(b.good_title)+'</strong><small>Оплата: '+orderCoins+' 🍬</small></div>'+
+      '<button class="btn btn-primary" data-tycoon-order="'+esc(b.code)+'" '+(state.order_done||sellable<orderQty?'disabled ':'')+'>'+(state.order_done?'✓ Выполнен':'Сдать заказ')+'</button></div>'+
       '<button class="btn btn-quiet btn-wide" data-business-sell="'+esc(b.code)+'" '+(sellable<=0?'disabled ':'')+'>'+
       (sellable?'Продать '+sellable+' шт. за '+(sellable*b.sell_price)+' 🍬':'Нет доступных продаж')+'</button></section>';
     return head+batchCard(b,state,config,p,starts,serverNow)+warehouse+equipment+workersCard+
