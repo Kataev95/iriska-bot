@@ -400,6 +400,145 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"pet_id":1,"kind":"business_sell","code":"florist"})
         self.assertEqual(unauth.status,401)
 
+    async def test_countryside_farm_and_fishing_shared_economy(self):
+        from unittest.mock import patch
+        from pet_countryside import CROPS
+        partner={"X-Telegram-Init-Data":signed(102)}
+        stranger={"X-Telegram-Init-Data":signed(201)}
+        async def act(kind, code="", headers=None, **extra):
+            r=await self.client.post("/api/action",headers=headers or self.headers,
+                json={"pet_id":1,"kind":kind,"code":code,**extra})
+            self.assertEqual(r.status,200)
+            return await r.json()
+        initial=await (await self.client.get("/api/pet/1",headers=self.headers)).json()
+        self.assertEqual(len(initial["countryside"]["plots"]),2)
+        self.assertEqual(initial["countryside"]["casts_remaining"],3)
+        for headers,status in (({},401),(stranger,403),(partner,200)):
+            response=await self.client.get("/api/countryside/1",headers=headers)
+            self.assertEqual(response.status,status)
+            if status==200:
+                data=await response.json()
+                self.assertEqual(data["countryside"],initial["countryside"])
+                self.assertIn("server_time",data)
+        bootstrap=await (await self.client.get("/api/bootstrap",headers=self.headers)).json()
+        self.assertEqual(len(bootstrap["countryside"]["fish"]),5)
+        denied=await self.client.post("/api/action",headers=stranger,
+            json={"pet_id":1,"kind":"farm_plant","code":"wheat","slot":1,"version":0})
+        self.assertEqual(denied.status,403)
+        forged=await act("farm_plant","wheat",slot=True,version=0)
+        self.assertIn("Неверные",forged["message"])
+        planted=await act("farm_plant","wheat",slot=1,version=0,price=0,quantity=9999)
+        self.assertTrue(planted["message"].startswith("✅"))
+        self.assertEqual(planted["pet"]["balance"],19)
+        p=planted["pet"]["countryside"]["plots"][0]
+        self.assertEqual(p["version"],1)
+        replay=await act("farm_plant","wheat",slot=1,version=0)
+        self.assertFalse(replay["message"].startswith("✅"))
+        early=await act("farm_harvest",slot=1,version=1)
+        self.assertFalse(early["message"].startswith("✅"))
+        watered=await act("farm_water",headers=partner,slot=1,version=1)
+        w=watered["pet"]["countryside"]["plots"][0]
+        self.assertEqual(w["ready_at"],p["ready_at"]-75)
+        self.assertEqual(w["version"],2)
+        await self.db._require().execute("UPDATE pet_farm_plots SET ready_at=? WHERE pet_id=1 AND slot=1",(time.time()-1,))
+        await self.db._require().commit()
+        results=await asyncio.gather(
+            act("farm_harvest",slot=1,version=2),
+            act("farm_harvest",headers=partner,slot=1,version=2),
+        )
+        self.assertEqual(sum(r["message"].startswith("✅") for r in results),1)
+        state=await self.db.countryside_state(1,datetime.now(self.config.tz).date().isoformat())
+        self.assertEqual(state["crops"]["wheat"],CROPS["wheat"].quantity)
+        self.assertEqual(state["plots"][0]["version"],3)
+        # Replayed purchase cannot plant again after harvest.
+        stale=await act("farm_plant","wheat",slot=1,version=0)
+        self.assertFalse(stale["message"].startswith("✅"))
+        sale=await act("country_sell","wheat",goods_kind="crop",expected_stock=2,coins=99999)
+        self.assertEqual(sale["pet"]["balance"],21)
+        self.assertEqual(sale["pet"]["countryside"]["sales_remaining"],6)
+        cast=await act("fish_cast",expected_last=0)
+        self.assertTrue(cast["message"].startswith("✅"))
+        session=cast["pet"]["countryside"]["cast"]
+        self.assertEqual(cast["pet"]["countryside"]["casts_remaining"],2)
+        early=await act("fish_reel",cast_id=session["id"])
+        self.assertFalse(early["message"].startswith("✅"))
+        replay=await act("fish_cast",expected_last=0)
+        self.assertFalse(replay["message"].startswith("✅"))
+        now=time.time()
+        await self.db._require().execute(
+            "UPDATE pet_fishing_casts SET bite_at=?,expires_at=? WHERE id=?",
+            (now-1,now+60,session["id"]))
+        await self.db._require().commit()
+        with patch("pet_countryside_db.roll_fish",return_value="goldfish"):
+            results=await asyncio.gather(
+                act("fish_reel",cast_id=session["id"],fish="moonfish",quantity=1000),
+                act("fish_reel",headers=partner,cast_id=session["id"]),
+            )
+        self.assertEqual(sum(r["message"].startswith("✅") for r in results),1)
+        sold=await act("country_sell","goldfish",goods_kind="fish",expected_stock=1)
+        self.assertEqual(sold["pet"]["balance"],25)
+        self.assertEqual(sold["pet"]["countryside"]["sales_remaining"],2)
+        self.assertEqual(sold["pet"]["countryside"]["collection"]["goldfish"],1)
+        self.assertEqual(sold["pet"]["countryside"]["fish"]["goldfish"],0)
+        # Expired attempts count, and cannot mint a fish or reset the quota.
+        for remaining in (1,0):
+            current=await act("fish_cast",expected_last=session["id"])
+            self.assertTrue(current["message"].startswith("✅"))
+            session=current["pet"]["countryside"]["cast"]
+            self.assertEqual(current["pet"]["countryside"]["casts_remaining"],remaining)
+            await self.db._require().execute(
+                "UPDATE pet_fishing_casts SET bite_at=?,expires_at=? WHERE id=?",
+                (now-20,now-1,session["id"]))
+            await self.db._require().commit()
+            missed=await act("fish_reel",cast_id=session["id"])
+            self.assertFalse(missed["message"].startswith("✅"))
+        exhausted=await act("fish_cast",expected_last=session["id"])
+        self.assertFalse(exhausted["message"].startswith("✅"))
+        self.assertEqual(exhausted["pet"]["countryside"]["collection"],{"goldfish":1})
+
+    async def test_country_upgrade_and_daily_limits(self):
+        from pet_countryside import COUNTRY_DAILY_SALES
+        now=time.time()
+        tz=self.config.tz
+        db=self.db._require()
+        await db.executemany("INSERT INTO pet_materials VALUES(?,?,?)",
+                             [(1,"wood",100),(1,"stone",100),(1,"leaf",100),(1,"crystal",10)])
+        await db.commit()
+        results=await asyncio.gather(
+            self.db.country_upgrade(1,101,"land",1),
+            self.db.country_upgrade(1,102,"land",1),
+        )
+        self.assertEqual(sum(x.startswith("✅") for x in results),1)
+        self.assertTrue((await self.db.country_upgrade(1,101,"land",2)).startswith("✅"))
+        self.assertTrue((await self.db.country_upgrade(1,101,"tool",1)).startswith("✅"))
+        self.assertTrue((await self.db.country_upgrade(1,101,"rod",1)).startswith("✅"))
+        self.assertFalse((await self.db.country_upgrade(1,201,"rod",2)).startswith("✅"))
+        day=datetime.fromtimestamp(now,tz).date().isoformat()
+        state=await self.db.countryside_state(1,day)
+        self.assertEqual(len(state["plots"]),4)
+        self.assertEqual(state["levels"],{"land":3,"tool":2,"rod":2})
+        for i in range(6):
+            slot=i%4+1
+            state=await self.db.countryside_state(1,day)
+            v=state["plots"][slot-1]["version"]
+            self.assertTrue((await self.db.farm_action(1,101,"plant","wheat",slot,v,now,tz)).startswith("✅"))
+            self.assertTrue((await self.db.farm_action(1,102,"water","",slot,v+1,now,tz)).startswith("✅"))
+            self.assertTrue((await self.db.farm_action(1,102,"harvest","",slot,v+2,now+301,tz)).startswith("✅"))
+        state=await self.db.countryside_state(1,day)
+        self.assertEqual(state["plants_remaining"],0)
+        self.assertFalse((await self.db.farm_action(1,101,"plant","wheat",1,state["plots"][0]["version"],now,tz)).startswith("✅"))
+        sold=await self.db.country_sell(1,102,"crop","wheat",12,now,tz)
+        self.assertTrue(sold.startswith("✅"))
+        state=await self.db.countryside_state(1,day)
+        self.assertEqual(state["sales_remaining"],0)
+        self.assertEqual((await self.db.get_user(CHAT_ID,102))["balance"],COUNTRY_DAILY_SALES)
+        self.assertEqual(state["crops"]["wheat"],4)
+        self.assertFalse((await self.db.country_sell(1,101,"crop","wheat",4,now,tz)).startswith("✅"))
+        tomorrow=await self.db.countryside_state(1,datetime.fromtimestamp(now+86400,tz).date().isoformat())
+        self.assertEqual(tomorrow["sales_remaining"],8)
+        self.assertEqual(tomorrow["plants_remaining"],6)
+        self.assertEqual(tomorrow["crops"]["wheat"],4)
+
     async def test_tycoon_endpoint_is_authorized_and_server_timed(self):
         await self.db._require().executemany(
             "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
@@ -761,14 +900,16 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=2", html)
-        self.assertIn("/static/app.js?v=17", html)
-        self.assertIn("/static/world-map.js?v=1", html)
+        self.assertIn("/static/app.js?v=18", html)
+        self.assertIn("/static/world-map.js?v=2", html)
+        self.assertIn("/static/countryside.js?v=1", html)
+        self.assertIn("/static/countryside.css?v=1", html)
         self.assertIn("/static/world-map.css?v=1", html)
         self.assertIn("/static/pet-life.js?v=1", html)
         self.assertIn("/static/pet-life.css?v=1", html)
         self.assertIn("/static/world-ui.js?v=1", html)
         self.assertIn("/static/world.css?v=1", html)
-        self.assertIn("/static/navigation.js?v=1", html)
+        self.assertIn("/static/navigation.js?v=2", html)
         self.assertIn("/static/studio.js?v=3", html)
         self.assertIn("/static/studio.css?v=2", html)
         self.assertIn("/static/season.js?v=1", html)
@@ -1082,6 +1223,8 @@ assert.equal(m.status(m.get("forest"),{...p,trip:{finish_at:100}},100,c).tone,"r
 assert.equal(m.status(m.get("business"),p,100,c).text,"В работе");
 assert.equal(m.status(m.get("business"),p,120,c).businessCode,"carpenter");
 assert.equal(m.recommended(p,120,c),"business");
+assert.equal(m.status(m.get("farm"),{...p,countryside:{plots:[{crop:"wheat",ready_at:99}]}},100,c).tone,"reward");
+assert.equal(m.status(m.get("lake"),{...p,countryside:{cast:{bite_at:90,expires_at:110}}},100,c).text,"Клюёт!");
 assert.equal(m.recommended({...p,trip:{finish_at:99}},120,c),"forest");
 const order={...p,businesses:{...p.businesses,units:{florist:{level:1,stock:2,order_done:false}}}};
 assert.equal(m.status(m.get("business"),order,120,c).text,"Заказ готов");
@@ -1097,6 +1240,35 @@ assert.doesNotMatch(m.renderMap(p,100,c,'"><script>'),/<script>/);
                             text=True, timeout=15, check=False)
         self.assertEqual(cp.returncode, 0, cp.stderr)
 
+    def test_country_frontend_timing_and_render(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script=static/"countryside.js"
+        code="""
+const assert=require("node:assert/strict"), c=require(process.argv[1]);
+assert.equal(c.plotState({crop:null},100),"empty");
+assert.equal(c.plotState({crop:"wheat",ready_at:101,watered:1},100),"watered");
+assert.equal(c.plotState({crop:"wheat",ready_at:100},100),"ready");
+assert.equal(c.castState({bite_at:10,expires_at:22},9),"waiting");
+assert.equal(c.castState({bite_at:10,expires_at:22},10),"bite");
+assert.equal(c.castState({bite_at:10,expires_at:22},22),"bite");
+assert.equal(c.castState({bite_at:10,expires_at:22},23),"missed");
+const p={best_streak:2,balance:5,materials:{},countryside:{levels:{land:1,tool:1,rod:1},plots:[{slot:1,version:0,crop:null},{slot:2,version:1,crop:"wheat",ready_at:10}],plants_remaining:3,casts_remaining:2,sales_remaining:8,last_cast_id:1,cast:{id:1,bite_at:10,expires_at:22},crops:{},fish:{},collection:{}}};
+const cfg={crops:[{code:"wheat",name:"Пшеница",icon:"🌾",price:1,seconds:300,quantity:2,sell:1}],fish:[{code:"carp",name:"Карп",icon:"🐟",rarity:"common",sell:1,weights:[100,100,100]}],upgrades:{land:[{costs:[]}],tool:[{costs:[]}],rod:[{costs:[]}]},plot_counts:[2,3,4],water_percent:[25,35,45],bite_windows:[12,15,18],plants_daily:6,casts_daily:3,sales_daily:8};
+const farm=c.farm(p,cfg,20,"wheat");
+assert.match(farm,/data-farm-plant="wheat"/);
+assert.match(farm,/data-farm-harvest="1"/);
+assert.match(c.fishing(p,cfg,15),/КЛЮЁТ!/);
+assert.match(c.fishing(p,cfg,30),/Рыба сорвалась/);
+assert.match(c.fishing(p,cfg,30),/data-fish-reel="1" disabled/);
+"""
+        cp=subprocess.run(["node","-e",code,str(script)],capture_output=True,text=True,timeout=15,check=False)
+        self.assertEqual(cp.returncode,0,cp.stderr)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -1104,7 +1276,7 @@ assert.doesNotMatch(m.renderMap(p,100,c,'"><script>'),/<script>/);
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("countryside.js", "world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)

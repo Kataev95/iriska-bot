@@ -25,7 +25,7 @@ for (const event of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenCha
 syncSafeArea();
 
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
-             group: "food", businessCode: "florist", mapLocation: null, busy: false, syncing: false, lastSync: 0,
+             group: "food", businessCode: "florist", mapLocation: null, seedCode: "wheat", busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
              studioMode:"frames",
              studio:null, studioLoading:false, studioFetchedAt:0, studioRequest:0,
@@ -38,6 +38,7 @@ const navigation = window.PetsNavigation.create();
 const tabs = window.PetsNavigation.tabs;
 const design = window.PetsWorldUI;
 const worldMap = window.PetsMap;
+const country = window.PetsCountryside;
 const icon = design.icon;
 const life = window.PetsLife;
 const reactionGate = life.createGate();
@@ -224,6 +225,9 @@ function showActionEffect(kind, code, before, after, message) {
       (after.businesses?.units?.[code]?.level||0)>(before.businesses?.units?.[code]?.level||0)) {
     playEffect("🏪 Предприятие улучшено!", "level");
     return;
+  }
+  if (["farm_harvest","fish_reel","country_upgrade","country_sell"].includes(kind)&&message.startsWith("✅")) {
+    playEffect(message,kind==="country_upgrade"?"level":"reward");return;
   }
   if (kind==="tycoon_hire" && (after.businesses?.units?.[code]?.workers||0)>(before.businesses?.units?.[code]?.workers||0)) {
     playEffect("🧑‍🔧 Новый работник!", "level");return;
@@ -687,6 +691,8 @@ function render() {
   app.innerHTML=tools+({
     profile,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
+    farm: p => country.farm(p,ui.config.countryside,serverNow(),ui.seedCode),
+    fishing: p => country.fishing(p,ui.config.countryside,serverNow()),
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow(),ui.businessCode),
     market: p => window.PetsMarket.renderMarket(
       ui.market,p,ui.config,ui.marketSelection,serverNow()),
@@ -740,6 +746,23 @@ async function refreshPet({force=false,quiet=true} = {}) {
     }
   } catch(e) {if(!quiet) showToast(e.message);}
   finally {ui.syncing = false;}
+}
+async function refreshCountryside(){
+  if(!ui.selected||!TG?.initData||ui.busy||ui.syncing||motionHidden()||
+     !modal.classList.contains("hidden")||!["farm","fishing"].includes(ui.tab))return;
+  const id=ui.selected,serial=++ui.syncSerial;
+  ui.syncing=true;
+  try{
+    const result=await api("/api/countryside/"+id);
+    if(serial!==ui.syncSerial||ui.selected!==id||ui.busy||!["farm","fishing"].includes(ui.tab))return;
+    if(JSON.stringify(ui.pet.countryside)!==JSON.stringify(result.countryside)){
+      ui.pet={...ui.pet,countryside:result.countryside};
+      syncClock(result);
+      render();
+    }else syncClock(result);
+    syncCountryside();
+  }catch{/* The next refresh retries; do not interrupt a fishing session with a toast. */}
+  finally{ui.syncing=false;}
 }
 async function loadMarket({force=false,quiet=true}={}) {
   if(!ui.selected || !TG?.initData || document.hidden || (ui.marketLoading&&!force)) return;
@@ -817,6 +840,7 @@ function displayRoute(tab) {
   if(tab==="league") loadLeague();
   if(tab==="season") loadSeason({quiet:false});
   if(tab==="studio") loadStudio({quiet:false});
+  if(tab==="farm"||tab==="fishing")refreshCountryside();
 }
 function goToTab(tab, root=false) {
   if(ui.busy) return;
@@ -963,6 +987,45 @@ async function performTycoonTap(code, jobId) {
   }
 }
 
+function syncCountryside(){
+  if(ui.busy||motionHidden()||!ui.pet?.countryside)return;
+  const s=ui.pet.countryside, now=serverNow();
+  if(ui.tab==="farm"){
+    for(const node of app.querySelectorAll("[data-country-plot]")){
+      const plot=s.plots.find(x=>x.slot===Number(node.dataset.countryPlot));
+      if(!plot?.crop)continue;
+      const state=country.plotState(plot,now),ready=state==="ready";
+      node.classList.toggle("plot-ready",ready);
+      node.classList.toggle("plot-growing",state==="growing");
+      node.classList.toggle("plot-watered",state==="watered");
+      const badge=node.querySelector("[data-plot-status]");
+      const text=ready?"Готово":plot.watered?"Полита":"Растёт";
+      if(badge&&badge.textContent!==text)badge.textContent=text;
+      const clock=node.querySelector("[data-plot-clock]");
+      if(clock)clock.textContent=ready?"Можно собирать":country.duration(plot.ready_at-now);
+      const art=node.querySelector("[data-plot-art]");
+      if(art&&ready)art.textContent=ui.config.countryside.crops.find(x=>x.code===plot.crop)?.icon||"🌾";
+      const water=node.querySelector("[data-farm-water]"),harvest=node.querySelector("[data-farm-harvest]");
+      if(water)water.disabled=ready||Boolean(plot.watered)||!ui.pet.best_streak;
+      if(harvest)harvest.disabled=!ready||!ui.pet.best_streak;
+    }
+  }
+  if(ui.tab==="fishing"){
+    const node=app.querySelector("[data-fish-game]");
+    if(!node)return;
+    const state=country.castState(s.cast,now);
+    for(const name of ["idle","waiting","bite","missed"])node.classList.toggle("fish-"+name,state===name);
+    const heading=node.querySelector("[data-fish-heading]");
+    const title=state==="waiting"?"Ждём клёва…":state==="bite"?"КЛЮЁТ!":state==="missed"?"Рыба сорвалась":"Забросьте удочку";
+    if(heading&&heading.textContent!==title){heading.textContent=title;if(state==="bite")haptic("medium");}
+    const clock=node.querySelector("[data-fish-clock]");
+    if(clock)clock.textContent=state==="waiting"?"Не подсекайте слишком рано":state==="bite"?country.duration(s.cast.expires_at-now)+" до схода":state==="missed"?"Можно начать заново":"Заброс бесплатный";
+    const reel=node.querySelector("[data-fish-reel]"),cast=node.querySelector("[data-fish-cast]");
+    if(reel)reel.disabled=state!=="bite"||!ui.pet.best_streak;
+    if(cast)cast.disabled=!ui.pet.best_streak||s.casts_remaining<=0||state==="waiting"||state==="bite";
+  }
+}
+
 async function perform(kind, code="", extra={}) {
   if (ui.busy) return;
   const id = ui.selected;
@@ -1007,6 +1070,53 @@ document.addEventListener("click", async e=>{
   if (target.dataset.tab) {tap();goToTab(target.dataset.tab);return;}
   if (target.dataset.mapLocation) {selectWorldLocation(target.dataset.mapLocation);return;}
   if (target.dataset.mapOpen) {openWorldLocation(target.dataset.mapOpen);return;}
+  if (target.dataset.click==="country-back") {tap();goBack();return;}
+  if (ui.busy && (ui.tab==="farm"||ui.tab==="fishing")) return;
+  if (target.dataset.countrySeed && ui.tab==="farm") {
+    if(ui.config.countryside.crops.some(d=>d.code===target.dataset.countrySeed)){
+      ui.seedCode=target.dataset.countrySeed;tap();render();
+    }
+    return;
+  }
+  if (target.dataset.farmPlant && ui.tab==="farm") {
+    const code=target.dataset.farmPlant, crop=ui.config.countryside.crops.find(d=>d.code===code);
+    const slot=Number(target.dataset.slot), version=Number(target.dataset.version);
+    if(crop&&Number.isSafeInteger(slot)&&Number.isSafeInteger(version)){
+      confirmDialog("Посадить "+crop.name+"?","С твоего баланса спишется "+crop.price+" 🍬. Урожай будет общим.",
+        ()=>perform("farm_plant",code,{slot,version}));
+    }
+    return;
+  }
+  if ((target.dataset.farmWater||target.dataset.farmHarvest) && ui.tab==="farm") {
+    await perform(target.dataset.farmWater?"farm_water":"farm_harvest","",{slot:Number(target.dataset.slot),version:Number(target.dataset.version)});
+    return;
+  }
+  if (target.dataset.fishCast!==undefined && ui.tab==="fishing") {
+    await perform("fish_cast","",{expected_last:Number(target.dataset.fishCast)});return;
+  }
+  if (target.dataset.fishReel && ui.tab==="fishing") {
+    await perform("fish_reel","",{cast_id:Number(target.dataset.fishReel)});return;
+  }
+  if (target.dataset.countryUpgrade && ["farm","fishing"].includes(ui.tab)) {
+    const kind=target.dataset.countryUpgrade, level=Number(target.dataset.level);
+    const tier=ui.config.countryside.upgrades[kind]?.[level-1];
+    if(tier){
+      const cost=tier.costs.map(x=>(ui.config.materials.find(m=>m.code===x.code)?.name||x.code)+": "+x.quantity).join(", ");
+      confirmDialog("Улучшить до уровня "+(level+1)+"?","Общие материалы: "+cost+".",
+        ()=>perform("country_upgrade",kind,{expected_level:level}));
+    }
+    return;
+  }
+  if (target.dataset.countrySell && ["farm","fishing"].includes(ui.tab)) {
+    const kind=target.dataset.goodsKind, code=target.dataset.countrySell, stock=Number(target.dataset.stock);
+    const d=(kind==="crop"?ui.config.countryside.crops:ui.config.countryside.fish).find(x=>x.code===code);
+    if(d){
+      const qty=Math.min(stock,Math.floor(ui.pet.countryside.sales_remaining/d.sell));
+      if(qty>0)confirmDialog("Продать "+d.name+"?","Со склада уйдёт до "+qty+" шт. Ты получишь до "+qty*d.sell+" 🍬 в пределах лимита.",
+        ()=>perform("country_sell",code,{goods_kind:kind,expected_stock:stock}));
+    }
+    return;
+  }
   if (["house-back","business-back","market-back","studio-back","season-back",
        "league-back","inventory-back","wardrobe-back"].includes(target.dataset.click)) {
     tap();goBack();return;
@@ -1320,10 +1430,17 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
 window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
-// A cheap countdown update only on the visible Tycoon screen.
+// Cheap countdown updates, only on the visible game screen.
 setInterval(()=>{
-  if(!motionHidden()&&ui.tab==="business"&&!ui.busy)syncTycoon();
+  if(motionHidden()||ui.busy)return;
+  if(ui.tab==="business")syncTycoon();
+  if(ui.tab==="world")syncWorldMap();
+  if(ui.tab==="farm"||ui.tab==="fishing")syncCountryside();
 },1000);
+// A short state-only poll lets the partner see a cast before its bite window closes.
+setInterval(()=>{
+  if(ui.tab==="fishing")refreshCountryside();
+},4000);
 setInterval(() => {
   if(motionHidden()) return;
   syncTimers();

@@ -29,6 +29,7 @@ from pet_market import (MAX_ACTIVE_LISTINGS_PER_PET, MAX_LISTINGS_PER_PET_DAY,
                         MAX_BUYS_PER_PET_DAY, MAX_ITEM_QUANTITY,
                         MAX_UNIT_PRICE, LISTING_TTL_SECONDS)
 from pets import species_by_code
+from pet_countryside import countryside_config
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent
@@ -187,6 +188,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "items": parse_set(pet["items"]), "worn": parse_set(pet["worn"]),
         "materials": materials, "crafts": crafts,
         "businesses": businesses,
+        "countryside": await db.countryside_state(pet_id, day),
         "house_rooms": rooms if pet["house"] else {code: 0 for code in ROOMS},
         "house_used": room_used if pet["house"] else [],
         "house_route_loot": {
@@ -298,6 +300,7 @@ async def bootstrap(request: web.Request):
             "worker_duration_percent": list(TYCOON_WORKER_PERCENT),
             "order_quantity": TYCOON_ORDER_QUANTITY,
         },
+        "countryside": countryside_config(),
         "market_rules": {
             "active_max": MAX_ACTIVE_LISTINGS_PER_PET,
             "posts_per_day": MAX_LISTINGS_PER_PET_DAY,
@@ -314,6 +317,16 @@ async def get_pet(request: web.Request):
     pet_id = int(request.match_info["pet_id"])
     return web.json_response(await snapshot(request.app["db"],
                                             request.app["config"], uid, pet_id))
+
+
+async def get_countryside(request: web.Request):
+    uid = current_user(request)["user_id"]
+    pet_id = int(request.match_info["pet_id"])
+    db, cfg = request.app["db"], request.app["config"]
+    await own_pet(db, uid, pet_id)
+    now = time.time()
+    state = await db.countryside_state(pet_id, datetime.fromtimestamp(now, cfg.tz).date().isoformat())
+    return web.json_response({"countryside": state, "server_time": time.time()})
 
 
 async def get_league(request: web.Request):
@@ -422,6 +435,22 @@ async def action(request: web.Request):
             pet_id, uid, code, now, cfg.tz, order=kind == "tycoon_order",
             expected_stock=payload.get("expected_stock"),
         )
+    elif kind == "country_upgrade":
+        result = await db.country_upgrade(pet_id, uid, code, payload.get("expected_level"))
+    elif kind in ("farm_plant", "farm_water", "farm_harvest"):
+        result = await db.farm_action(
+            pet_id, uid, kind.removeprefix("farm_"), code,
+            payload.get("slot"), payload.get("version"), now, cfg.tz
+        )
+    elif kind == "fish_cast":
+        result = await db.fish_cast(pet_id, uid, payload.get("expected_last"), now, cfg.tz)
+    elif kind == "fish_reel":
+        result = await db.fish_reel(pet_id, uid, payload.get("cast_id"), now)
+    elif kind == "country_sell":
+        result = await db.country_sell(
+            pet_id, uid, str(payload.get("goods_kind", "")), code,
+            payload.get("expected_stock"), now, cfg.tz
+        )
     elif kind == "studio_equip":
         result = await db.equip_studio_style(
             pet_id, uid, str(payload.get("slot", "")), code, now
@@ -501,6 +530,7 @@ def create_app(db, config) -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/api/bootstrap", bootstrap)
     app.router.add_get(r"/api/pet/{pet_id:\d+}", get_pet)
+    app.router.add_get(r"/api/countryside/{pet_id:\d+}", get_countryside)
     app.router.add_get(r"/api/market/{pet_id:\d+}", get_market)
     app.router.add_get(r"/api/league/{pet_id:\d+}", get_league)
     app.router.add_get(r"/api/season/{pet_id:\d+}", get_season)

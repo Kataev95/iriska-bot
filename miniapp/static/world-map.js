@@ -3,9 +3,9 @@
 (function(root){
   "use strict";
   const places=Object.freeze([
-    {id:"farm",name:"Ферма",kind:"future",icon:"🌾",description:"Грядки, урожай и развитие собственного хозяйства.",stage:"Следующий этап · ферма и рыбалка"},
+    {id:"farm",name:"Ферма",route:"farm",icon:"🌾",description:"Покупайте семена, поливайте грядки, собирайте урожай и расширяйте хозяйство."},
     {id:"forest",name:"Лес",route:"trips",icon:"🌲",description:"Отправляйтесь за ресурсами, исследуйте маршруты и проходите лесную тропу."},
-    {id:"lake",name:"Озеро",kind:"future",icon:"🐟",description:"Рыбалка, улов и новые занятия у воды.",stage:"Следующий этап · ферма и рыбалка"},
+    {id:"lake",name:"Озеро",route:"fishing",icon:"🐟",description:"Забрасывайте удочку, ловите рыбу и пополняйте общую коллекцию."},
     {id:"house",name:"Домик",route:"house",icon:"🏡",description:"Ваш уютный дом: комнаты, улучшения и полезные эффекты."},
     {id:"club",name:"Клуб",route:"club",icon:"🏆",description:"Лига питомцев, сезоны, испытания и награды."},
     {id:"business",name:"Tycoon",route:"business",icon:"🏭",description:"Ручное производство, оборудование, работники и заказы."},
@@ -25,6 +25,18 @@
       if(p.chapter&&p.chapter.stage<3)return {text:"Лесная тропа",tone:"active"};
       return {text:"Маршруты",tone:"open"};
     }
+    if(place.id==="farm"){
+      const plots=p.countryside?.plots||[];
+      if(plots.some(x=>x.crop&&Number(x.ready_at)<=now))return {text:"Урожай готов",tone:"reward"};
+      if(plots.some(x=>x.crop))return {text:"Растёт",tone:"active"};
+      return {text:p.best_streak?"Посадить":"После вылупления",tone:"open"};
+    }
+    if(place.id==="lake"){
+      const cast=p.countryside?.cast;
+      if(cast&&now>=cast.bite_at&&now<=cast.expires_at)return {text:"Клюёт!",tone:"reward"};
+      if(cast&&now<cast.bite_at)return {text:"Ждём клёва",tone:"active"};
+      return {text:p.best_streak?"Рыбалка":"После вылупления",tone:"open"};
+    }
     if(place.id==="business"){
       const units=p.businesses?.units||{};
       const entries=Object.entries(units);
@@ -42,7 +54,7 @@
     return {text:"Открыто",tone:"open"};
   }
   function recommended(p,now,config){
-    for(const id of ["forest","business"]){
+    for(const id of ["lake","farm","forest","business"]){
       if(status(get(id),p,now,config).tone==="reward")return id;
     }
     return "house";
@@ -99,7 +111,7 @@
       '<div><div class="eyebrow">'+(place.kind==="future"?"В РАЗРАБОТКЕ":"ЛОКАЦИЯ")+'</div><h2>'+place.name+'</h2>'+
       '<p>'+esc(place.description)+'</p></div></div>'+
       (note?'<p class="map-detail-note">'+esc(note)+'</p>':"")+
-      (place.route?'<button type="button" class="btn btn-primary btn-wide" data-map-open="'+place.id+'">'+(s.text==="Заказ готов"?"Перейти к заказу":s.text==="Партия готова"?"Забрать товары":s.tone==="reward"?"Перейти к награде":"Открыть локацию")+' →</button>':
+      (place.route?'<button type="button" class="btn btn-primary btn-wide" data-map-open="'+place.id+'">'+(s.text==="Клюёт!"?"К удочке":s.text==="Урожай готов"?"К урожаю":s.text==="Заказ готов"?"Перейти к заказу":s.text==="Партия готова"?"Забрать товары":s.tone==="reward"?"Перейти к награде":"Открыть локацию")+' →</button>':
       '<div class="map-future-note">🔒 '+esc(place.stage)+'</div>')+'</section>';
   }
   const api=Object.freeze({places,get,valid,status,recommended,renderMap,renderDetail});
