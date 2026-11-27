@@ -389,7 +389,7 @@ class PetBusinessDatabase(PetMarketDatabase):
                 f"+{row['output_qty']} {definition.good_title.lower()}."
             )
 
-    async def sell_business_goods(self, pet_id, user_id, code, now, tz, *, order=False):
+    async def sell_business_goods(self, pet_id, user_id, code, now, tz, *, order=False, expected_stock=None):
         definition = BUSINESSES.get(code)
         if definition is None:
             return "Неизвестное предприятие"
@@ -406,6 +406,8 @@ class PetBusinessDatabase(PetMarketDatabase):
             ).fetchone()
             if stock is None or int(stock["quantity"]) <= 0:
                 return "Нет готовых товаров для продажи"
+            if order and (type(expected_stock) is not int or expected_stock != int(stock["quantity"])):
+                return "Склад изменился. Обновите заказ"
             day = datetime.fromtimestamp(now, tz).date().isoformat()
             earned = await (
                 await db.execute(
