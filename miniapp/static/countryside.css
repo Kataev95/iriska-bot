@@ -1,0 +1,60 @@
+/* Countryside — compact game screens, CSS-only illustrations and motion. */
+.country-banner{display:flex;align-items:center;justify-content:space-between;padding:18px;gap:12px;border:1px solid #819a68;border-radius:22px;background:linear-gradient(145deg,#34563e,#726443);margin:12px 0;min-height:120px}
+.country-banner h1{font-size:29px;letter-spacing:-.04em;margin:4px 0;color:#fff4d8}
+.country-banner p{font-size:12px;color:#e3e3ce;margin:0}
+.country-banner>span{font-size:59px;flex-shrink:0}
+.lake-banner{background:linear-gradient(145deg,#244b48,#38768a);border-color:#709e99}
+.country-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
+.country-summary span{font-size:12px;border-radius:14px;padding:12px;background:#233e34;color:#bfd2bd;border:1px solid #48654e}
+.country-summary b{display:block;color:#ffdf9a;font-size:19px;margin-top:3px}
+.country-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.country-row strong{font-size:14px}
+.seed-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:12px 0}
+.seed-card{min-width:0;background:#243d30;color:#f5efd7;border:1px solid #597052;border-radius:14px;padding:9px 3px;display:grid;gap:4px;justify-items:center;touch-action:manipulation}
+.seed-card.selected{background:#415b37;border-color:#e3daa0;box-shadow:0 3px 0 #152d20}
+.seed-card span{font-size:29px}.seed-card b{font-size:11px;overflow-wrap:anywhere}.seed-card small{font-size:10px;color:#d9e3ca}
+.farm-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:12px 0}
+.farm-plot{min-width:0;padding:10px;background:linear-gradient(155deg,#314a35,#213a2e);border:1px solid #657b51;border-radius:17px;display:flex;flex-direction:column;gap:6px;align-items:stretch}
+.farm-plot>.country-row{gap:4px;font-size:10px}.farm-plot>.country-row>small{font-size:9px;letter-spacing:.03em;color:#b8c9b2}
+.plot-state{font-size:10px;color:#dce6c7;background:#496141;border-radius:7px;padding:3px 5px}
+.plot-ready{border-color:#ecd18c;background:linear-gradient(150deg,#5b5731,#314332)}
+.plot-ready .plot-state{color:#493619;background:#ffe19b}
+.plot-watered .soil{background:repeating-linear-gradient(15deg,#5b4735 0 8px,#76563b 8px 14px)}
+.plot-art{height:79px;position:relative;display:grid;place-items:center;isolation:isolate;border-radius:12px;background:linear-gradient(160deg,#91ae69,#6b9058);overflow:hidden}
+.soil{position:absolute;inset:30px 12px 8px;background:repeating-linear-gradient(15deg,#a07a4d 0 8px,#805e3b 8px 14px);border:2px solid #b39460;border-radius:50%;transform:rotate(-8deg)}
+.plot-art>span{position:relative;font-size:43px;line-height:1;text-shadow:0 4px 2px #233c3060}
+.plot-growing .plot-art>span,.plot-watered .plot-art>span{animation:country-sway 3s ease-in-out infinite alternate}
+@keyframes country-sway{from{transform:rotate(-4deg)}to{transform:rotate(4deg)}}
+.farm-plot>b{font-size:12px;color:#f4efd6;overflow-wrap:anywhere}
+.farm-plot>[data-plot-clock]{font-size:11px;color:#d4dfcb;min-height:14px}
+.farm-plot .btn{font-size:11px;padding:9px 5px;min-height:39px;margin:0}
+.country-stock-row{display:flex;align-items:center;justify-content:space-between;gap:9px;border-top:1px solid #546953;padding:11px 0;margin-top:8px}
+.country-stock-row>div{min-width:0}.country-stock-row strong,.country-stock-row small{display:block;overflow-wrap:anywhere}
+.country-stock-row small{font-size:11px;color:#c3d1ba;margin-top:4px}
+.country-stock-row .btn{flex-shrink:0;font-size:11px;max-width:51%;padding:8px 10px}
+.fish-game{text-align:center}.fish-game h2{margin:12px 0 4px;font-size:21px;color:#fff4d3}
+.fish-game p{color:#cbded2;font-size:12px}
+.lake-art{position:relative;height:155px;border-radius:17px;overflow:hidden;background:linear-gradient(#a0d4c9 0 45%,#5098a0 45%,#37788b 100%);isolation:isolate}
+.lake-hills{position:absolute;left:-12%;right:-12%;top:23%;height:34%;background:#609d79;clip-path:polygon(0 100%,0 58%,15% 13%,27% 62%,43% 0,58% 69%,75% 21%,90% 62%,100% 20%,100% 100%)}
+.lake-waves{position:absolute;inset:56% 0 0;background:repeating-linear-gradient(0deg,#aee8dd18 0 2px,transparent 2px 19px);animation:lake-wave 5s ease-in-out infinite alternate}
+@keyframes lake-wave{from{transform:translateY(-3px)}to{transform:translateY(4px)}}
+.bobber{position:absolute;left:48%;top:61%;font-size:20px;line-height:1;color:#f9ddc9;text-shadow:0 4px 0 #c85c4e,0 6px 5px #204a58}
+.fish-rod{position:absolute;bottom:0;right:4%;font-size:81px;line-height:1}
+.fish-idle .bobber,.fish-missed .bobber{visibility:hidden}
+.fish-waiting .bobber{animation:bobber-drift 1.8s ease-in-out infinite}
+.fish-bite .bobber{animation:bobber-bite .45s ease-in-out infinite}
+.fish-bite .lake-art{outline:2px solid #ffe49a}
+.fish-bite [data-fish-reel]{background:#e8bc66;color:#263b2a;border-color:#ffedb9;font-weight:850}
+@keyframes bobber-drift{50%{transform:translateY(3px)}}
+@keyframes bobber-bite{50%{transform:translateY(9px) scale(.8)}}
+.fish-collection{display:grid;gap:7px;margin:12px 0}
+.fish-card{display:flex;align-items:center;gap:9px;border:1px solid #59715e;border-radius:11px;padding:9px;background:#223c35}
+.fish-card>span{width:37px;height:37px;border-radius:11px;display:grid;place-items:center;background:#394d43;color:#b9cbb9;font-size:23px}
+.fish-card>div{flex:1;min-width:0;text-align:left}.fish-card b,.fish-card small{display:block;font-size:12px;overflow-wrap:anywhere}
+.fish-card small{font-size:10px;color:#c0d0c0;margin-top:3px}
+.fish-card:not(.discovered){opacity:.82}
+.fish-card.rarity-rare{border-color:#6e9eb6}.fish-card.rarity-epic{border-color:#aa92ce}.fish-card.rarity-legendary{border-color:#e1c47b}.fish-card.rarity-mythic{border-color:#db8cbb}
+.fish-card.discovered>span{background:#526e50}
+.seed-card:focus-visible{outline:2px solid #fff4bb;outline-offset:2px}
+@media(max-width:360px){.farm-grid{gap:6px}.farm-plot{padding:7px}.seed-card small{font-size:9px}.country-banner>span{font-size:45px}.country-banner h1{font-size:25px}}
+@media(prefers-reduced-motion:reduce){.plot-art>span,.lake-waves,.bobber{animation:none!important}}
