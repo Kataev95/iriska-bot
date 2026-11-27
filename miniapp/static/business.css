@@ -38,3 +38,42 @@
  .business-ground{letter-spacing:9px;}
  .business-icon{width:45px;height:45px;font-size:26px;}}
 @media(prefers-reduced-motion:reduce){.business-hero *{animation:none;}}
+
+/* Tycoon: workshop console, one enterprise at a time. */
+.tycoon-banner.business-hero{height:142px;display:flex;justify-content:space-between;padding:18px;gap:12px;background:linear-gradient(145deg,#334a3c,#5c5135);border-color:#84794d}
+.tycoon-banner-text{position:relative;z-index:2;min-width:0}
+.tycoon-banner h2{margin:4px 0 6px;font-size:26px;letter-spacing:-.04em;color:#ffefb9;line-height:1.05}
+.tycoon-banner p{font-size:12px;margin:0;color:#e3ddbd}
+.tycoon-banner-art{font-size:64px;flex-shrink:0;line-height:1}
+.tycoon-summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.tycoon-summary>div{background:#20382f;border:1px solid #42614c;border-radius:15px;padding:12px}
+.tycoon-summary small,.tycoon-summary b{display:block}
+.tycoon-summary small{color:#c3d6c1;font-size:11px;margin-bottom:4px}
+.tycoon-summary b{color:#ffe0a2;font-size:19px}
+.tycoon-select{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}
+.tycoon-unit{display:grid;justify-items:start;gap:4px;min-width:0;text-align:left;background:#20382e;color:#ecf0dd;border:1px solid #49634d;border-radius:16px;padding:12px}
+.tycoon-unit>span{font-size:25px}.tycoon-unit strong{font-size:12px;overflow-wrap:anywhere}.tycoon-unit small{color:#bed1b7;font-size:11px}
+.tycoon-unit.active{border-color:#d6e5a1;background:#3c5740;box-shadow:0 3px 0 #152c20}
+.tycoon-machine{position:relative;padding:14px;border:1px solid #78875c;border-radius:22px;background:linear-gradient(145deg,#384b37,#233b30);box-shadow:0 5px 0 #10271e;margin:13px 0}
+.tycoon-machine .business-job{background:#1b3026;padding:10px 13px;margin:9px 0;justify-content:center;text-align:center}
+.tycoon-machine [data-business-countdown]{font-size:25px;font-variant-numeric:tabular-nums;color:#fce0a2}
+.tycoon-machine [data-tycoon-status]{color:#d4dfca}
+.tycoon-idle{text-align:center}.tycoon-idle .recipe-costs{justify-content:center}
+.machine-art{display:flex;align-items:center;justify-content:center;gap:12px;min-height:78px;font-size:27px}
+.machine-art strong{font-size:55px;line-height:1}
+.machine-art>span{font-size:25px;opacity:.8}
+.tycoon-tap{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid #dfefaf;border-radius:20px;padding:13px 10px 17px;background:linear-gradient(160deg,#d9e8a5,#83bd82);box-shadow:0 5px 0 #476f45;color:#163b28;touch-action:manipulation}
+.tycoon-tap b{font-size:21px;letter-spacing:.03em}.tycoon-tap small{font-size:12px;font-weight:700}
+.tycoon-tap:active{transform:translateY(3px);box-shadow:0 2px 0 #476f45}
+.tycoon-tap:disabled{opacity:.82;box-shadow:0 3px 0 #476f45}
+.tycoon-ready .tycoon-tap{background:#b4d7a1}
+.tycoon-tap-meter{margin:14px 0 6px;font-size:12px;color:#d9e5d0}
+.tycoon-hit .machine-art strong{animation:tycoon-strike .28s ease-out}
+@keyframes tycoon-strike{0%{transform:scale(1)}45%{transform:scale(1.13) rotate(-5deg)}100%{transform:scale(1)}}
+.tycoon-order{display:flex;align-items:center;gap:9px;justify-content:space-between;padding:12px;background:#344a35;border:1px solid #6d8050;border-radius:15px;margin-top:12px}
+.tycoon-order>div{min-width:0}.tycoon-order strong,.tycoon-order small{display:block;overflow-wrap:anywhere}.tycoon-order strong{font-size:14px}.tycoon-order small{margin-top:5px;color:#e3d7ab;font-size:11px}
+.tycoon-order .btn{flex-shrink:0;max-width:45%}
+.tycoon-upgrade .row,.tycoon-warehouse .row{gap:7px;flex-wrap:wrap}
+.tycoon-unit:focus-visible,.tycoon-tap:focus-visible{outline:2px solid #f3edc5;outline-offset:3px}
+@media(max-width:360px){.tycoon-banner h2{font-size:22px}.tycoon-banner-art{font-size:48px}.tycoon-unit{padding:9px}.tycoon-order{padding:9px}.tycoon-order .btn{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.tycoon-hit .machine-art strong{animation:none}.tycoon-tap:active{transform:none}}
