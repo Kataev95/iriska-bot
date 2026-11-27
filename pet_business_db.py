@@ -72,6 +72,14 @@ class PetBusinessDatabase(PetMarketDatabase):
                 level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 2),
                 PRIMARY KEY(pet_id,business)
             );
+            CREATE TABLE IF NOT EXISTS pet_tycoon_orders (
+                pet_id INTEGER NOT NULL,
+                business TEXT NOT NULL,
+                day TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                sale_id INTEGER NOT NULL UNIQUE,
+                PRIMARY KEY(pet_id,business,day)
+            );
             CREATE TABLE IF NOT EXISTS pet_tycoon_work (
                 job_id INTEGER PRIMARY KEY,
                 taps INTEGER NOT NULL CHECK(taps BETWEEN 1 AND 30),
@@ -123,6 +131,10 @@ class PetBusinessDatabase(PetMarketDatabase):
             "SELECT business,level FROM pet_tycoon_workers WHERE pet_id=?", (pet_id,)
         )).fetchall()
         worker_by = {r["business"]: int(r["level"]) for r in workers}
+        orders = await (await db.execute(
+            "SELECT business FROM pet_tycoon_orders WHERE pet_id=? AND day=?", (pet_id, day)
+        )).fetchall()
+        completed_orders = {row["business"] for row in orders}
         level_by = {r["business"]: int(r["level"]) for r in levels}
         stock_by = {r["business"]: int(r["quantity"]) for r in stocks}
         job_by = {r["business"]: r for r in jobs}
@@ -133,6 +145,7 @@ class PetBusinessDatabase(PetMarketDatabase):
                 "level": level_by.get(code, 0),
                 "stock": stock_by.get(code, 0),
                 "workers": worker_by.get(code, 0),
+                "order_done": code in completed_orders,
                 "job": self._tycoon_job(active) if active else None,
             }
         return {
@@ -409,6 +422,13 @@ class PetBusinessDatabase(PetMarketDatabase):
             if order and (type(expected_stock) is not int or expected_stock != int(stock["quantity"])):
                 return "Склад изменился. Обновите заказ"
             day = datetime.fromtimestamp(now, tz).date().isoformat()
+            if order:
+                done = await (await db.execute(
+                    "SELECT 1 FROM pet_tycoon_orders WHERE pet_id=? AND business=? AND day=?",
+                    (pet_id, code, day),
+                )).fetchone()
+                if done:
+                    return "Сегодняшний заказ уже выполнен"
             earned = await (
                 await db.execute(
                     "SELECT COALESCE(SUM(coins),0) FROM pet_business_sales "
@@ -447,12 +467,17 @@ class PetBusinessDatabase(PetMarketDatabase):
                 (pet["chat_id"], user_id, coins,
                  f"питомец #{pet_id}, бизнес {code}: {quantity} шт."),
             )
-            await db.execute(
+            sale = await db.execute(
                 "INSERT INTO pet_business_sales("
                 "pet_id,business,user_id,day,quantity,coins,created_at) "
                 "VALUES(?,?,?,?,?,?,?)",
                 (pet_id, code, user_id, day, quantity, coins, now),
             )
+            if order:
+                await db.execute(
+                    "INSERT INTO pet_tycoon_orders(pet_id,business,day,user_id,sale_id) VALUES(?,?,?,?,?)",
+                    (pet_id, code, day, user_id, sale.lastrowid),
+                )
             return (
                 ("✅ Заказ выполнен! " if order else "✅ Продано ")
                 + f"{definition.good_icon} {quantity} шт. "
