@@ -57,10 +57,7 @@
         '<span class="league-badge-icon">'+esc(icon)+'</span>'+
         '<div class="league-badge-main"><strong>'+esc(title)+'</strong>'+
           '<small>'+esc(description)+'</small>'+
-          (target>0?'<div class="progress league-badge-progress" role="progressbar" '+
-            'aria-label="Прогресс достижения" aria-valuemin="0" aria-valuemax="'+target+
-            '" aria-valuenow="'+Math.min(current,target)+'">'+
-            '<i style="width:'+pct(current,target)+'%"></i></div>'+
+          (target>0?'<progress class="game-progress league-badge-progress" aria-label="Прогресс достижения" max="'+target+'" value="'+Math.min(current,target)+'"></progress>'+
             '<span class="league-badge-counter">'+Math.min(current,target)+' / '+target+'</span>':'')+
         '</div><span class="league-badge-status">'+(unlocked?'✅':'🔒')+'</span></div>';
     }).join('');
