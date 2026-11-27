@@ -45,3 +45,5 @@
 .arcade-game button:focus-visible,.arcade-card button:focus-visible{outline:2px solid #fff3bd;outline-offset:2px}
 @media(max-width:360px){.arcade-grid{gap:6px}.arcade-card.panel{padding:9px}.arcade-banner>span{font-size:44px}.arcade-memory span{font-size:17px}.arcade-card h2{font-size:13px}}
 @media(prefers-reduced-motion:reduce){.arcade-falling{top:72%}}
+
+.arcade-round{display:flex;justify-content:space-between;align-items:center;gap:8px}.arcade-round b{color:#ffe0a2}.arcade-progress{margin-top:7px}.arcade-feedback{min-height:17px;margin:9px 0 2px;text-align:center;color:#e3eecf;font-size:12px;font-weight:700}
