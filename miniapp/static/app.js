@@ -747,6 +747,23 @@ async function refreshPet({force=false,quiet=true} = {}) {
   } catch(e) {if(!quiet) showToast(e.message);}
   finally {ui.syncing = false;}
 }
+async function refreshCountryside(){
+  if(!ui.selected||!TG?.initData||ui.busy||ui.syncing||motionHidden()||
+     !modal.classList.contains("hidden")||!["farm","fishing"].includes(ui.tab))return;
+  const id=ui.selected,serial=++ui.syncSerial;
+  ui.syncing=true;
+  try{
+    const result=await api("/api/countryside/"+id);
+    if(serial!==ui.syncSerial||ui.selected!==id||ui.busy||!["farm","fishing"].includes(ui.tab))return;
+    if(JSON.stringify(ui.pet.countryside)!==JSON.stringify(result.countryside)){
+      ui.pet={...ui.pet,countryside:result.countryside};
+      syncClock(result);
+      render();
+    }else syncClock(result);
+    syncCountryside();
+  }catch{/* The next refresh retries; do not interrupt a fishing session with a toast. */}
+  finally{ui.syncing=false;}
+}
 async function loadMarket({force=false,quiet=true}={}) {
   if(!ui.selected || !TG?.initData || document.hidden || (ui.marketLoading&&!force)) return;
   if(!force && ui.market && Date.now()-ui.marketFetchedAt<60000) return;
@@ -823,6 +840,7 @@ function displayRoute(tab) {
   if(tab==="league") loadLeague();
   if(tab==="season") loadSeason({quiet:false});
   if(tab==="studio") loadStudio({quiet:false});
+  if(tab==="farm"||tab==="fishing")refreshCountryside();
 }
 function goToTab(tab, root=false) {
   if(ui.busy) return;
@@ -1412,13 +1430,17 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
 window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
-// A cheap countdown update only on the visible Tycoon screen.
+// Cheap countdown updates, only on the visible game screen.
 setInterval(()=>{
   if(motionHidden()||ui.busy)return;
   if(ui.tab==="business")syncTycoon();
   if(ui.tab==="world")syncWorldMap();
   if(ui.tab==="farm"||ui.tab==="fishing")syncCountryside();
 },1000);
+// A short state-only poll lets the partner see a cast before its bite window closes.
+setInterval(()=>{
+  if(ui.tab==="fishing")refreshCountryside();
+},4000);
 setInterval(() => {
   if(motionHidden()) return;
   syncTimers();
