@@ -59,9 +59,12 @@
         html+='<p class="subtitle">Второй владелец уже играет. Результат будет общим.</p><button type="button" class="btn btn-wide" data-arcade-refresh="1">Обновить</button>';
       }else{
         const total=run.game==="catch"?5:run.game==="reaction"?3:run.game==="memory"?6:null;
-        html+='<div class="arcade-round">'+(total?"Раунд "+(s.round+1)+" / "+total:"Ходы "+s.moves+" / "+config.max_moves)+'</div>'+
+        const tally=run.game==="catch"?s.points:run.game==="memory"?Math.round(s.points*100/6):run.game==="reaction"&&s.round?Math.round(s.points/s.round):null;
+        html+='<div class="arcade-round"><span>'+(total?"Раунд "+(s.round+1)+" / "+total:"Ходы "+s.moves+" / "+config.max_moves)+'</span>'+(tally!==null?'<b>'+score(tally)+'</b>':"")+'</div>'+
+          '<progress class="game-progress arcade-progress" aria-label="Прогресс игры" max="'+(total||config.max_moves)+'" value="'+(total?s.round:s.moves)+'"></progress>'+
           '<div class="arcade-status" data-arcade-status aria-live="polite">'+esc(status(run,now))+'</div>'+
           controls(run,now,config)+
+          '<p class="arcade-feedback" data-arcade-feedback aria-live="polite"></p>'+
           '<button type="button" class="btn btn-quiet btn-wide" data-arcade-cancel="1">Завершить без награды</button>';
       }
       html+='</section>';
