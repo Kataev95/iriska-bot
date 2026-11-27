@@ -122,6 +122,7 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/assets/pets/dragon_", pet["image"])
         self.assertEqual(pet["world_hour"], datetime.fromtimestamp(pet["server_time"], self.config.tz).hour)
         self.assertFalse(pet["partner_wrote_today"])
+        self.assertEqual(pet["portrait_reactions"], {"happy": "/assets/pets/dragon_happy.jpg", "sleep": "/assets/pets/dragon_sleep.jpg"})
         day = datetime.now(self.config.tz).date().isoformat()
         await self.db._require().execute("UPDATE pets SET b_day=? WHERE id=1", (day,))
         await self.db._require().commit()
@@ -706,7 +707,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=2", html)
-        self.assertIn("/static/app.js?v=14", html)
+        self.assertIn("/static/app.js?v=15", html)
+        self.assertIn("/static/pet-life.js?v=1", html)
+        self.assertIn("/static/pet-life.css?v=1", html)
         self.assertIn("/static/world-ui.js?v=1", html)
         self.assertIn("/static/world.css?v=1", html)
         self.assertIn("/static/navigation.js?v=1", html)
@@ -827,7 +830,7 @@ assert.equal(nav.back(), "home");
         self.assertIn("motion-paused", css)
         self.assertIn("prefers-reduced-motion:reduce", css)
         self.assertIn("animation-play-state:paused", css)
-        self.assertIn("if(document.hidden) return;", js)
+        self.assertIn("if(motionHidden()) return;", js)
         self.assertIn("design.phase(p.world_hour)", js)
         self.assertIn("design.landscape()", js)
         self.assertIn("pet-portrait studio-frame", js)
@@ -865,6 +868,69 @@ assert.doesNotMatch(d.routeIcon("<script>"), /<script>/);
                             text=True, timeout=15, check=False)
         self.assertEqual(cp.returncode, 0, cp.stderr)
 
+    def test_pet_life_is_cosmetic_and_cancels_stale_reactions(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        js = (static / "app.js").read_text(encoding="utf-8")
+        css = (static / "pet-life.css").read_text(encoding="utf-8")
+        life = (static / "pet-life.js").read_text(encoding="utf-8")
+        self.assertIn('if(reactPet(ui.pet,"pat"))', js)
+        self.assertIn("careConfirmed&&reactPet(after,code,true)", js)
+        self.assertIn("reactionGate.current(token,p.id)", js)
+        self.assertIn("scene.dataset.markup!==sceneMarkup", js)
+        self.assertIn('TG?.onEvent?.("deactivated"', js)
+        self.assertNotIn("offsetWidth", js)
+        self.assertNotIn("fetch(", life)
+        self.assertIn("prefers-reduced-motion:reduce", css)
+        for motion in ("pet-breathe", "egg-rock", "pet-snooze", "pet-feed", "pet-play", "pet-settle"):
+            self.assertIn("@keyframes " + motion, css)
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script = static / "pet-life.js"
+        code = """
+const assert = require("node:assert/strict");
+const d = require(process.argv[1]);
+const p = {id:1,best_streak:2,joy:80,image:"/assets/pets/dragon_baby.jpg",
+  portrait_reactions:{happy:"/assets/pets/dragon_happy.jpg",sleep:"/assets/pets/dragon_sleep.jpg"}};
+assert.equal(d.pose(p),"idle");
+assert.equal(d.pose({...p,best_streak:0}),"egg");
+assert.equal(d.pose({...p,image:"/assets/pets/dragon_sleep.jpg"}),"sleep");
+assert.equal(d.pose({...p,image:"/assets/pets/dragon_hungry.jpg"}),"hungry");
+assert.equal(d.pose({...p,image:"/assets/pets/dragon_happy.jpg"}),"happy");
+assert.equal(d.pose({...p,joy:15}),"bored");
+assert.equal(d.reaction(p,"feed"),null);
+assert.equal(d.reaction(p,"play",true).motion,"play");
+assert.equal(d.reaction(p,"sleep",true).expression,"sleep");
+assert.equal(d.reaction({...p,best_streak:0},"feed",true),null);
+assert.equal(d.reaction({...p,best_streak:0},"pat").motion,"egg");
+assert.equal(d.reaction({...p,image:"/assets/pets/dragon_sleep.jpg"},"pat").motion,"quiet");
+assert.equal(d.reaction({...p,image:"/assets/pets/dragon_hungry.jpg"},"pat").expression,undefined);
+assert.equal(d.reaction({...p,image:"/assets/pets/dragon_hungry.jpg"},"play",true).expression,undefined);
+assert.equal(d.expressionPath(p,"happy"),"/assets/pets/dragon_happy.jpg");
+assert.equal(d.expressionPath({portrait_reactions:{happy:"https://bad.example/x.jpg"}},"happy"),null);
+assert.equal(d.expressionPath(p,"toString"),null);
+const g=d.createGate();
+const a=g.begin(1,100,1500);
+assert.equal(g.begin(1,150,1500),null);
+assert.equal(g.current(a,1),true);
+assert.equal(g.current(a,2),false);
+const b=g.begin(1,200,1500,true);
+assert.notEqual(a,b);
+assert.equal(g.finish(a),false);
+assert.equal(g.current(b,1),true);
+g.reset();
+assert.equal(g.current(b,1),false);
+assert.equal(g.finish(b),false);
+const c=g.begin(2,300,1500);
+assert.equal(g.finish(c),true);
+assert.equal(g.begin(2,301,1500)>c,true);
+"""
+        cp = subprocess.run(["node", "-e", code, str(script)], capture_output=True,
+                            text=True, timeout=15, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -872,7 +938,7 @@ assert.doesNotMatch(d.routeIcon("<script>"), /<script>/);
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
