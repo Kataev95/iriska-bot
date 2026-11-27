@@ -1098,8 +1098,9 @@ document.addEventListener("click", async e=>{
     const unit=ui.config.businesses.find(b=>b.code===target.dataset.tycoonOrder);
     if(unit){
       const qty=ui.config.tycoon_rules?.order_quantity||2;
+      const expectedStock=Number(ui.pet.businesses?.units?.[unit.code]?.stock||0);
       confirmDialog("Выполнить заказ?","С общего склада спишется "+qty+" шт. Ты получишь "+(qty*unit.sell_price)+" 🍬 в пределах дневного лимита.",
-        ()=>perform("tycoon_order",unit.code));
+        ()=>perform("tycoon_order",unit.code,{expected_stock:expectedStock}));
     }
     return;
   }
