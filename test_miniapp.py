@@ -698,7 +698,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=13", html)
+        self.assertIn("/static/app.js?v=14", html)
+        self.assertIn("/static/world-ui.js?v=1", html)
+        self.assertIn("/static/world.css?v=1", html)
         self.assertIn("/static/navigation.js?v=1", html)
         self.assertIn("/static/studio.js?v=2", html)
         self.assertIn("/static/studio.css?v=2", html)
@@ -807,6 +809,52 @@ assert.equal(nav.back(), "home");
                             text=True, timeout=15, check=False)
         self.assertEqual(cp.returncode, 0, cp.stderr)
 
+    def test_world_ui_visual_rules(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        css = (static / "world.css").read_text(encoding="utf-8")
+        js = (static / "app.js").read_text(encoding="utf-8")
+        self.assertIn("motion-paused", css)
+        self.assertIn("prefers-reduced-motion:reduce", css)
+        self.assertIn("animation-play-state:paused", css)
+        self.assertIn("if(document.hidden) return;", js)
+        self.assertIn("design.phase(p.world_hour)", js)
+        self.assertIn("design.landscape()", js)
+        self.assertIn("pet-portrait studio-frame", js)
+        self.assertIn("partner_wrote_today", js)
+        self.assertIn('max="100" value="', js)
+        self.assertNotIn("backdrop-filter:blur", css)
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script = static / "world-ui.js"
+        code = """
+const assert = require("node:assert/strict");
+const d = require(process.argv[1]);
+assert.equal(d.phase(0), "night");
+assert.equal(d.phase(7), "night");
+assert.equal(d.phase(8), "morning");
+assert.equal(d.phase(11), "day");
+assert.equal(d.phase(18), "evening");
+assert.equal(d.phase(22), "night");
+assert.equal(d.phase(null), "day");
+assert.equal(d.phase(24), "day");
+assert.equal(d.percent(-5), 0);
+assert.equal(d.percent(103), 100);
+assert.equal(d.percent(NaN), 0);
+assert.match(d.needs(21,"Energy","bolt"), /is-low/);
+assert.match(d.needs(40,"Energy","bolt"), /is-medium/);
+assert.match(d.needs(83,"Energy","bolt"), /value="83"/);
+assert.doesNotMatch(d.needs(83,"Energy","bolt"), /style=/);
+assert.match(d.landscape(), /scene-hill-far/);
+assert.match(d.routeIcon("world"), /<svg/);
+assert.doesNotMatch(d.routeIcon("<script>"), /<script>/);
+"""
+        cp = subprocess.run(["node", "-e", code, str(script)], capture_output=True,
+                            text=True, timeout=15, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -814,7 +862,7 @@ assert.equal(nav.back(), "home");
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
