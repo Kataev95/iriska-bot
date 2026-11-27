@@ -38,6 +38,8 @@ class PetCountrysideDatabase(PetBusinessDatabase):
             CREATE UNIQUE INDEX IF NOT EXISTS idx_country_active_cast
                 ON pet_fishing_casts(pet_id) WHERE resolved_at IS NULL;
             CREATE INDEX IF NOT EXISTS idx_country_cast_day ON pet_fishing_casts(pet_id,day);
+            CREATE INDEX IF NOT EXISTS idx_country_cast_last ON pet_fishing_casts(pet_id,id DESC);
+            CREATE INDEX IF NOT EXISTS idx_country_fish_album ON pet_fishing_casts(pet_id,fish) WHERE fish IS NOT NULL;
             CREATE TABLE IF NOT EXISTS pet_country_goods (
                 pet_id INTEGER NOT NULL, kind TEXT NOT NULL, code TEXT NOT NULL,
                 quantity INTEGER NOT NULL CHECK(quantity>=0),
@@ -76,39 +78,41 @@ class PetCountrysideDatabase(PetBusinessDatabase):
         return (int(planted[0]) if planted else 0,int(casts[0]),int(sales[0]))
 
     async def countryside_state(self, pet_id, day):
-        # Serialize the short read with writes so the pair sees consistent state.
-        async with self._game_transaction() as db:
-            levels = await self._country_levels(db,pet_id)
-            plants, casts, sales = await self._country_counts(db,pet_id,day)
-            rows = await (await db.execute(
-                "SELECT slot,version,crop,ready_at,watered FROM pet_farm_plots WHERE pet_id=?", (pet_id,)
-            )).fetchall()
-            plots = {r["slot"]:dict(r) for r in rows}
-            last = await (await db.execute(
-                "SELECT id,bite_at,expires_at,resolved_at,fish FROM pet_fishing_casts "
-                "WHERE pet_id=? ORDER BY id DESC LIMIT 1", (pet_id,)
-            )).fetchone()
-            goods = await (await db.execute(
-                "SELECT kind,code,quantity FROM pet_country_goods WHERE pet_id=?", (pet_id,)
-            )).fetchall()
-            collection = await (await db.execute(
-                "SELECT fish,COUNT(*) AS total FROM pet_fishing_casts "
-                "WHERE pet_id=? AND fish IS NOT NULL GROUP BY fish", (pet_id,)
-            )).fetchall()
-            return {
-                "levels": levels,
-                "plots": [plots.get(i,{"slot":i,"version":0,"crop":None,"ready_at":None,"watered":0})
-                          for i in range(1,PLOT_COUNTS[levels["land"]-1]+1)],
-                "plants_remaining": max(0,FARM_DAILY_PLANTS-plants),
-                "casts_remaining": max(0,FISH_DAILY_CASTS-casts),
-                "sales_remaining": max(0,COUNTRY_DAILY_SALES-sales),
-                "last_cast_id": int(last["id"]) if last else 0,
-                "cast": {k:last[k] for k in ("id","bite_at","expires_at")} if last and last["resolved_at"] is None else None,
-                "last_fish": last["fish"] if last else None,
-                "crops": {r["code"]:r["quantity"] for r in goods if r["kind"]=="crop"},
-                "fish": {r["code"]:r["quantity"] for r in goods if r["kind"]=="fish"},
-                "collection": {r["fish"]:r["total"] for r in collection},
-            }
+        async with self._game_read() as db:
+            return await self._countryside_state(db, pet_id, day)
+
+    async def _countryside_state(self, db, pet_id, day):
+        levels = await self._country_levels(db,pet_id)
+        plants, casts, sales = await self._country_counts(db,pet_id,day)
+        rows = await (await db.execute(
+            "SELECT slot,version,crop,ready_at,watered FROM pet_farm_plots WHERE pet_id=?", (pet_id,)
+        )).fetchall()
+        plots = {r["slot"]:dict(r) for r in rows}
+        last = await (await db.execute(
+            "SELECT id,bite_at,expires_at,resolved_at,fish FROM pet_fishing_casts "
+            "WHERE pet_id=? ORDER BY id DESC LIMIT 1", (pet_id,)
+        )).fetchone()
+        goods = await (await db.execute(
+            "SELECT kind,code,quantity FROM pet_country_goods WHERE pet_id=?", (pet_id,)
+        )).fetchall()
+        collection = await (await db.execute(
+            "SELECT fish,COUNT(*) AS total FROM pet_fishing_casts "
+            "WHERE pet_id=? AND fish IS NOT NULL GROUP BY fish", (pet_id,)
+        )).fetchall()
+        return {
+            "levels": levels,
+            "plots": [plots.get(i,{"slot":i,"version":0,"crop":None,"ready_at":None,"watered":0})
+                      for i in range(1,PLOT_COUNTS[levels["land"]-1]+1)],
+            "plants_remaining": max(0,FARM_DAILY_PLANTS-plants),
+            "casts_remaining": max(0,FISH_DAILY_CASTS-casts),
+            "sales_remaining": max(0,COUNTRY_DAILY_SALES-sales),
+            "last_cast_id": int(last["id"]) if last else 0,
+            "cast": {k:last[k] for k in ("id","bite_at","expires_at")} if last and last["resolved_at"] is None else None,
+            "last_fish": last["fish"] if last else None,
+            "crops": {r["code"]:r["quantity"] for r in goods if r["kind"]=="crop"},
+            "fish": {r["code"]:r["quantity"] for r in goods if r["kind"]=="fish"},
+            "collection": {r["fish"]:r["total"] for r in collection},
+        }
 
     async def country_upgrade(self, pet_id, user_id, kind, expected_level):
         if kind not in UPGRADES or type(expected_level) is not int:

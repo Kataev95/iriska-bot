@@ -45,18 +45,35 @@ ACTIONS_ALLOWED = {"care", "start", "claim", "daily", "buy", "wear", "profession
 async def api_errors(request: web.Request, handler):
     try:
         response = await handler(request)
-        if request.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
-            response.headers["X-Content-Type-Options"] = "nosniff"
-        return response
     except Unauthorized as exc:
-        return web.json_response({"error": str(exc)}, status=401,
-                                 headers={"Cache-Control": "no-store"})
-    except web.HTTPException:
-        raise
-    except (ValueError, KeyError, TypeError) as exc:
-        return web.json_response({"error": "Некорректные данные"}, status=400,
-                                 headers={"Cache-Control": "no-store"})
+        response = web.json_response({"error": str(exc)}, status=401)
+    except web.HTTPException as exc:
+        if not request.path.startswith("/api/"):
+            raise
+        messages = {400:"Некорректные данные",403:"Действие недоступно",
+                    404:"Раздел не найден",405:"Метод недоступен",413:"Запрос слишком большой",
+                    429:"Слишком много запросов"}
+        response = web.json_response({"error": messages.get(exc.status,"Ошибка запроса")},
+                                     status=exc.status,
+                                     headers={k:v for k,v in exc.headers.items() if k.lower() in ("allow","retry-after")})
+    except (ValueError, KeyError, TypeError, OverflowError):
+        response = web.json_response({"error": "Некорректные данные"}, status=400)
+    if request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if response.status == 200 and isinstance(response, web.Response) and len(response.body or b"") >= 1024:
+            response.enable_compression()
+    elif request.path.startswith("/static/") and response.status in (200,304):
+        response.headers["Cache-Control"] = ("public, max-age=3600"
+            if re.fullmatch(r"[0-9]+",request.query.get("v","")) else "no-cache")
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+def positive_id(value):
+    if type(value) is not int or not 1 <= value <= 9223372036854775807:
+        raise ValueError("Invalid identifier")
+    return value
 
 
 def current_user(request):
@@ -94,9 +111,18 @@ def pet_icon(pet):
 
 
 async def snapshot(db, cfg, user_id: int, pet_id: int):
-    pet = await own_pet(db, user_id, pet_id)
-    pet = await db.game_refresh(pet_id, time.time(), cfg.tz)
-    now = time.time()
+    # One lock/transaction for a coherent snapshot, no nested write transactions.
+    async with db._game_transaction() as conn:
+        pet = await db._game_pet(conn, pet_id, user_id)
+        if pet is None:
+            raise web.HTTPForbidden(text="Это не твой питомец")
+        now = time.time()
+        pet = await db._game_refresh(conn, pet, now, cfg.tz)
+        return await _snapshot_locked(db, conn, cfg, user_id, pet, now)
+
+
+async def _snapshot_locked(db, conn, cfg, user_id, pet, now):
+    pet_id = pet["id"]
     partner = pet["user_b"] if user_id == pet["user_a"] else pet["user_a"]
     names = await db.user_names(pet["chat_id"], [partner])
     profile = names.get(partner)
@@ -176,7 +202,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "portrait_reactions": portrait_reactions,
         "partner": partner_name,
         "xp": current_xp, "level": level_for(current_xp), "max_level": MAX_LEVEL,
-        "progression": await db.progression_state(pet),
+        "progression": await db._progression_state(conn, pet),
         "level_start_xp": xp_for_level(level_for(current_xp)),
         "next_xp": next_xp,
         "server_time": now,
@@ -192,8 +218,8 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "items": parse_set(pet["items"]), "worn": parse_set(pet["worn"]),
         "materials": materials, "crafts": crafts,
         "businesses": businesses,
-        "countryside": await db.countryside_state(pet_id, day),
-        "arcade": await db.arcade_state(pet_id, user_id, now, cfg.tz),
+        "countryside": await db._countryside_state(conn, pet_id, day),
+        "arcade": await db._arcade_state(conn, pet_id, user_id, now, cfg.tz),
         "house_rooms": rooms if pet["house"] else {code: 0 for code in ROOMS},
         "house_used": room_used if pet["house"] else [],
         "house_route_loot": {
@@ -321,24 +347,26 @@ async def bootstrap(request: web.Request):
 
 async def get_pet(request: web.Request):
     uid = current_user(request)["user_id"]
-    pet_id = int(request.match_info["pet_id"])
+    pet_id = positive_id(int(request.match_info["pet_id"]))
     return web.json_response(await snapshot(request.app["db"],
                                             request.app["config"], uid, pet_id))
 
 
 async def get_countryside(request: web.Request):
     uid = current_user(request)["user_id"]
-    pet_id = int(request.match_info["pet_id"])
+    pet_id = positive_id(int(request.match_info["pet_id"]))
     db, cfg = request.app["db"], request.app["config"]
-    await own_pet(db, uid, pet_id)
-    now = time.time()
-    state = await db.countryside_state(pet_id, datetime.fromtimestamp(now, cfg.tz).date().isoformat())
+    async with db._game_read() as conn:
+        if await db._game_pet(conn, pet_id, uid) is None:
+            raise web.HTTPForbidden(text="Это не твой питомец")
+        now = time.time()
+        state = await db._countryside_state(conn, pet_id, datetime.fromtimestamp(now, cfg.tz).date().isoformat())
     return web.json_response({"countryside": state, "server_time": time.time()})
 
 
 async def get_arcade(request: web.Request):
     uid = current_user(request)["user_id"]
-    pet_id = int(request.match_info["pet_id"])
+    pet_id = positive_id(int(request.match_info["pet_id"]))
     db, cfg = request.app["db"], request.app["config"]
     state = await db.arcade_state(pet_id, uid, time.time(), cfg.tz)
     if state is None:
@@ -357,7 +385,7 @@ async def arcade_action(request: web.Request):
     if not isinstance(action,str) or not isinstance(game,str):
         raise ValueError("Invalid arcade action")
     db,cfg=request.app["db"],request.app["config"]
-    result=await db.arcade_action(payload["pet_id"],uid,action,game,payload,time.time(),cfg.tz)
+    result=await db.arcade_action(positive_id(payload["pet_id"]),uid,action,game,payload,time.time(),cfg.tz)
     if result is None:
         raise web.HTTPForbidden(text="Это не твой питомец")
     # Full snapshot only after a completed game (XP, level, records).
@@ -368,7 +396,7 @@ async def arcade_action(request: web.Request):
 
 async def get_league(request: web.Request):
     user_id = current_user(request)["user_id"]
-    pet_id = int(request.match_info["pet_id"])
+    pet_id = positive_id(int(request.match_info["pet_id"]))
     cfg = request.app["config"]
     result = await request.app["db"].league_state(
         pet_id, user_id, time.time(), cfg.tz
@@ -380,7 +408,7 @@ async def get_league(request: web.Request):
 
 async def get_season(request: web.Request):
     user_id = current_user(request)["user_id"]
-    pet_id = int(request.match_info["pet_id"])
+    pet_id = positive_id(int(request.match_info["pet_id"]))
     cfg = request.app["config"]
     result = await request.app["db"].season_state(
         pet_id, user_id, time.time(), cfg.tz
@@ -392,7 +420,7 @@ async def get_season(request: web.Request):
 
 async def get_studio(request: web.Request):
     user_id = current_user(request)["user_id"]
-    pet_id = int(request.match_info["pet_id"])
+    pet_id = positive_id(int(request.match_info["pet_id"]))
     result = await request.app["db"].studio_state(
         pet_id, user_id, request.app["config"].tz
     )
@@ -403,7 +431,7 @@ async def get_studio(request: web.Request):
 
 async def get_market(request: web.Request):
     uid = current_user(request)["user_id"]
-    pet_id = int(request.match_info["pet_id"])
+    pet_id = positive_id(int(request.match_info["pet_id"]))
     cfg = request.app["config"]
     result = await request.app["db"].market_state(
         pet_id, uid, time.time(), cfg.tz
@@ -420,7 +448,7 @@ async def action(request: web.Request):
     payload = await request.json()
     if not isinstance(payload, dict):
         raise ValueError("Payload")
-    pet_id = int(payload["pet_id"])
+    pet_id = positive_id(payload["pet_id"])
     kind = str(payload["kind"])
     code = str(payload.get("code", ""))
     db, cfg = request.app["db"], request.app["config"]
@@ -437,7 +465,7 @@ async def action(request: web.Request):
     elif kind in ("chapter_craft", "chapter_finish"):
         result = await db.advance_chapter(pet_id, uid, code, kind.removeprefix("chapter_"), now, cfg.tz)
     elif kind == "claim":
-        result = await db.claim_trip(pet_id, uid, int(payload["trip_id"]), now, cfg.tz)
+        result = await db.claim_trip(pet_id, uid, positive_id(payload["trip_id"]), now, cfg.tz)
     elif kind == "daily":
         result = await db.claim_daily(
             pet_id, uid, datetime.fromtimestamp(now, cfg.tz).date().isoformat()
@@ -463,7 +491,7 @@ async def action(request: web.Request):
         result = await db.start_business_job(pet_id, uid, code, now, cfg.tz)
     elif kind == "business_collect" and code in BUSINESSES:
         result = await db.collect_business_job(
-            pet_id, uid, code, int(payload["job_id"]), now
+            pet_id, uid, code, positive_id(payload["job_id"]), now
         )
     elif kind == "tycoon_hire" and code in BUSINESSES:
         result = await db.hire_tycoon_worker(pet_id, uid, code, payload["expected_level"])
@@ -513,11 +541,11 @@ async def action(request: web.Request):
         )
     elif kind == "market_cancel":
         result = await db.cancel_market_listing(
-            pet_id, uid, int(payload["listing_id"]), now
+            pet_id, uid, positive_id(payload["listing_id"]), now
         )
     elif kind == "market_buy":
         result = await db.buy_market_listing(
-            pet_id, uid, int(payload["listing_id"]), now, cfg.tz
+            pet_id, uid, positive_id(payload["listing_id"]), now, cfg.tz
         )
     else:
         raise ValueError("Unknown action")
@@ -535,7 +563,7 @@ async def tycoon_tap(request: web.Request):
     payload = await request.json()
     if not isinstance(payload, dict) or type(payload.get("pet_id")) is not int:
         raise ValueError("Payload")
-    pet_id = payload["pet_id"]
+    pet_id = positive_id(payload["pet_id"])
     db = request.app["db"]
     await own_pet(db, uid, pet_id)
     result = await db.tap_tycoon_job(
@@ -563,7 +591,10 @@ async def pet_image(request):
     path = ASSETS / name
     if not path.is_file():
         raise web.HTTPNotFound()
-    return web.FileResponse(path)
+    response = web.FileResponse(path)
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def create_app(db, config) -> web.Application:

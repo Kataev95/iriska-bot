@@ -400,6 +400,81 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"pet_id":1,"kind":"business_sell","code":"florist"})
         self.assertEqual(unauth.status,401)
 
+    async def test_optimized_api_headers_and_identifier_validation(self):
+        for path,headers,status in (
+            ("/api/pet/1",{},401),
+            ("/api/pet/2",self.headers,403),
+            ("/api/pet/9223372036854775808",self.headers,400),
+            ("/api/pet/0",self.headers,400),
+            ("/api/missing",self.headers,404),
+        ):
+            response=await self.client.get(path,headers=headers)
+            self.assertEqual(response.status,status)
+            self.assertIn("error",await response.json())
+            self.assertEqual(response.headers["Cache-Control"],"no-store")
+            self.assertEqual(response.headers["X-Content-Type-Options"],"nosniff")
+        for value in (True,1.9,"1",2**63,0):
+            response=await self.client.post("/api/action",headers=self.headers,
+                json={"pet_id":value,"kind":"care","code":"feed"})
+            self.assertEqual(response.status,400)
+        headers={**self.headers,"Accept-Encoding":"gzip"}
+        response=await self.client.get("/api/bootstrap",headers=headers)
+        self.assertEqual(response.status,200)
+        self.assertEqual(response.headers.get("Content-Encoding"),"gzip")
+        self.assertEqual(response.headers["Cache-Control"],"no-store")
+        self.assertEqual(len((await response.json())["progression"]["thresholds"]),100)
+        response=await self.client.get("/static/runtime.js?v=1")
+        self.assertEqual(response.status,200)
+        self.assertEqual(response.headers["Cache-Control"],"public, max-age=3600")
+        response=await self.client.get("/static/runtime.js")
+        self.assertEqual(response.headers["Cache-Control"],"no-cache")
+        response=await self.client.get("/")
+        self.assertEqual(response.headers["Cache-Control"],"no-store")
+
+    async def test_snapshot_transaction_and_read_only_feature_polls(self):
+        db=self.db._require()
+        statements=[]
+        await db.set_trace_callback(statements.append)
+        try:
+            response=await self.client.get("/api/pet/1",headers=self.headers)
+            self.assertEqual(response.status,200)
+            state=await response.json()
+            self.assertIn("progression",state)
+            self.assertIn("arcade",state)
+            self.assertIn("countryside",state)
+            self.assertEqual(sum(sql.startswith("BEGIN IMMEDIATE") for sql in statements),1)
+            self.assertEqual(sum(sql.startswith("UPDATE pets SET food=") for sql in statements),1)
+            statements.clear()
+            for path in ("/api/countryside/1","/api/arcade/1"):
+                response=await self.client.get(path,headers=self.headers)
+                self.assertEqual(response.status,200)
+            self.assertFalse(any(sql.startswith(("BEGIN IMMEDIATE","UPDATE ","INSERT ","DELETE ")) for sql in statements))
+            # Snapshot must wait for an in-flight write, then see the rollback, not leaked uncommitted XP.
+            entered=asyncio.Event()
+            release=asyncio.Event()
+            async def writer():
+                try:
+                    async with self.db._game_transaction() as conn:
+                        await conn.execute("UPDATE pets SET xp=99999 WHERE id=1")
+                        entered.set()
+                        await release.wait()
+                        raise RuntimeError("rollback")
+                except RuntimeError:
+                    pass
+            task=asyncio.create_task(writer())
+            await entered.wait()
+            pending=asyncio.create_task(self.client.get("/api/pet/1",headers=self.headers))
+            try:
+                await asyncio.sleep(.02)
+                self.assertFalse(pending.done())
+            finally:
+                release.set()
+                await task
+            response=await pending
+            self.assertEqual((await response.json())["xp"],state["xp"])
+        finally:
+            await db.set_trace_callback(None)
+
     async def test_progression_http_shared_claims_skills_and_specialization(self):
         from pet_game import xp_for_level
         partner={"X-Telegram-Init-Data":signed(102)}
@@ -1097,7 +1172,8 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=2", html)
-        self.assertIn("/static/app.js?v=20", html)
+        self.assertIn("/static/app.js?v=21", html)
+        self.assertIn("/static/runtime.js?v=1", html)
         self.assertIn("/static/world-map.js?v=3", html)
         self.assertIn("/static/arcade.js?v=1", html)
         self.assertIn("/static/progression.js?v=1", html)
@@ -1538,6 +1614,56 @@ assert.doesNotMatch(html,/style=/);
         cp=subprocess.run(["node","-e",code,str(script)],capture_output=True,text=True,timeout=15,check=False)
         self.assertEqual(cp.returncode,0,cp.stderr)
 
+    def test_runtime_scheduler_and_request_gate(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static=Path(__file__).resolve().parent/"miniapp"/"static"
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script=static/"runtime.js"
+        code="""
+const assert=require("node:assert/strict"), r=require(process.argv[1]);
+let visible=true, ticks=0, seq=0, timers=new Map(), delay=1000;
+const scheduler=r.createScheduler({
+ run:()=>{ticks++}, delay:()=>delay, active:()=>visible,
+ schedule:(fn,ms)=>{const id=++seq;timers.set(id,{fn,ms});return id},
+ cancel:id=>timers.delete(id)
+});
+function fire(){
+ const [id,entry]=timers.entries().next().value;
+ timers.delete(id);entry.fn();return entry.ms;
+}
+scheduler.wake();scheduler.wake();
+assert.equal(timers.size,1);
+assert.equal(fire(),0);
+assert.equal(ticks,1);
+assert.equal(timers.size,1);
+assert.equal(timers.values().next().value.ms,1000);
+delay=100;
+fire();
+assert.equal(timers.values().next().value.ms,100);
+visible=false;scheduler.stop();
+assert.equal(timers.size,0);
+scheduler.wake();
+assert.equal(scheduler.pending(),false);
+visible=true;scheduler.wake();
+assert.equal(fire(),0);
+assert.equal(ticks,3);
+assert.deepEqual(r.cadence("arcade",true,true),{tick:100,feature:null});
+assert.deepEqual(r.cadence("fishing",false,false),{tick:1000,feature:8000});
+assert.equal(r.cadence("fishing",true,false,false).feature,null);
+const gate=r.createReadGate(), a=gate.begin(), b=gate.begin();
+gate.finish(a);assert.equal(gate.busy(),true);
+gate.finish(b);assert.equal(gate.busy(),false);
+"""
+        cp=subprocess.run(["node","-e",code,str(script)],capture_output=True,text=True,timeout=15,check=False)
+        self.assertEqual(cp.returncode,0,cp.stderr)
+        app=(static/"app.js").read_text(encoding="utf-8")
+        self.assertNotIn("setInterval(",app)
+        self.assertIn('scheduler.stop()',app)
+        self.assertIn('patchHome("[data-feature-screen]",markup)',app)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -1545,7 +1671,7 @@ assert.doesNotMatch(html,/style=/);
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("progression.js", "arcade.js", "countryside.js", "world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("runtime.js", "progression.js", "arcade.js", "countryside.js", "world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
