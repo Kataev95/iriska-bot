@@ -413,6 +413,13 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         initial=await (await self.client.get("/api/pet/1",headers=self.headers)).json()
         self.assertEqual(len(initial["countryside"]["plots"]),2)
         self.assertEqual(initial["countryside"]["casts_remaining"],3)
+        for headers,status in (({},401),(stranger,403),(partner,200)):
+            response=await self.client.get("/api/countryside/1",headers=headers)
+            self.assertEqual(response.status,status)
+            if status==200:
+                data=await response.json()
+                self.assertEqual(data["countryside"],initial["countryside"])
+                self.assertIn("server_time",data)
         bootstrap=await (await self.client.get("/api/bootstrap",headers=self.headers)).json()
         self.assertEqual(len(bootstrap["countryside"]["fish"]),5)
         denied=await self.client.post("/api/action",headers=stranger,
