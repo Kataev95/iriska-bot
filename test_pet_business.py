@@ -329,6 +329,10 @@ class BusinessGameTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(sum(r.startswith("✅") for r in results),1)
         self.assertEqual((await self.day_state())["units"]["florist"]["stock"],3)
+        self.assertTrue((await self.day_state())["units"]["florist"]["order_done"])
+        self.assertFalse((await self.day_state("2026-11-14"))["units"]["florist"]["order_done"])
+        self.assertIn("уже выполнен",await self.db.sell_business_goods(
+            1,102,"florist",NOW+1502,TZ,order=True,expected_stock=3))
         self.assertEqual((await self.day_state())["sales_coins_remaining"],8)
         await self.db.sell_business_goods(1,101,"florist",NOW+1502,TZ)
         self.assertEqual((await self.day_state())["sales_coins_remaining"],2)
