@@ -36,6 +36,8 @@ const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
              marketRequest:0, marketSelection:{kind:"material",code:"leaf",quantity:1,price:2} };
 const navigation = window.PetsNavigation.create();
 const tabs = window.PetsNavigation.tabs;
+const design = window.PetsWorldUI;
+const icon = design.icon;
 const emoji = {food:"🍪",wear:"🎀",freeze:"🧊",house:"🏠"};
 const resourceQuantity = (p, code) => Math.max(0,Number(p.materials?.[code] || 0));
 const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
@@ -233,25 +235,31 @@ function hero(p) {
   const stickerIcons={paw:"🐾",compass:"🧭",heart:"💞",medal:"🎯",crystal:"💎",crown:"👑"};
   const frame=frameCodes.includes(p.style?.frame)?p.style.frame:"classic";
   const sticker=stickerIcons[p.style?.sticker]||"🐾";
-  const target = p.next_xp ?? p.xp;
-  const prior = Number.isFinite(p.level_start_xp) ? p.level_start_xp : 25*p.level*(p.level-1);
-  const progress = p.next_xp == null ? 100 :
-    Math.min(100,Math.max(0,Math.round((p.xp-prior)/Math.max(1,target-prior)*100)));
-  return '<div class="hero studio-frame studio-frame-'+frame+
-    '"><div class="hero-overlay">✨ Уровень '+p.level+' / 20</div>'+
-    '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'" decoding="async">'+
+  const target=p.next_xp??p.xp;
+  const prior=Number.isFinite(p.level_start_xp)?p.level_start_xp:25*p.level*(p.level-1);
+  const progress=p.next_xp==null?100:design.percent((p.xp-prior)/Math.max(1,target-prior)*100);
+  const phase=design.phase(p.world_hour);
+  return '<section class="hero pet-scene phase-'+phase+'" aria-label="Долина питомца">'+design.landscape()+
+    '<div class="scene-top"><span class="scene-badge">'+icon(phase==="night"?"sleep":"sun")+
+    safe(design.phaseLabel(p.world_hour))+'</span><span class="scene-badge scene-level">'+icon("star")+
+    'Ур. '+p.level+' / 20</span></div>'+
+    '<div class="pet-portrait studio-frame studio-frame-'+frame+'">'+
+    '<img src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'" decoding="async" fetchpriority="high">'+
     '<span class="studio-hero-sticker" aria-hidden="true">'+sticker+'</span>'+
     '<button type="button" class="pet-touch" data-click="pet-greet" aria-label="Поздороваться с питомцем — визуальный эффект, без затрат ирисок">'+
-      '<span class="pet-hint" aria-hidden="true">✨ Поприветствовать</span></button></div>'+
-    '<div class="panel"><div class="eyebrow">МОЙ ПИТОМЕЦ</div>'+
-    '<div class="row"><div><div class="hero-title">'+safe(p.name)+'</div>'+
-    '<div class="subtitle">🤝 Вместе с '+safe(p.partner)+'</div>'+
-    (p.season_title?'<div class="chip chip-purple season-name-tag">'+safe(p.season_title)+'</div>':'')+'</div>'+
-    '<div class="chip chip-purple">🔥 '+p.streak+' дн.</div></div>'+
-    '<div class="stat-grid">'+stat("🍖","Сытость",p.food)+stat("😊","Настроение",p.joy)+stat("⚡","Энергия",p.energy)+'</div>'+
-    '<div class="xp-line"><b>⭐ '+p.xp+' XP</b><div class="progress" role="progressbar" aria-label="Опыт текущего уровня" aria-valuenow="'+progress+'" aria-valuemin="0" aria-valuemax="100"><i style="width:'+progress+'%"></i></div>'+
-    '<small>'+(p.next_xp == null ? "MAX":p.next_xp+' XP')+'</small></div>'+
-    '<p class="mood-caption">'+safe(p.mood||"🐾 У питомца всё хорошо")+'</p></div>';
+    '<span class="pet-hint" aria-hidden="true">Погладить ✨</span></button></div>'+
+    '<div class="scene-caption">'+icon("paw")+' Ваш маленький мир</div></section>'+
+    '<section class="panel pet-dashboard"><div class="pet-identity"><div class="pet-identity-main">'+
+    '<div class="hero-title">'+safe(p.name)+'</div><div class="pet-partner">'+icon("heart")+
+    'Вместе с '+safe(p.partner)+'</div>'+
+    (p.season_title?'<div class="chip chip-purple season-name-tag">'+safe(p.season_title)+'</div>':'')+
+    '</div><div class="streak-pill" aria-label="Серия '+p.streak+' дней">'+icon("flame")+p.streak+' дн.</div></div>'+
+    '<div class="need-grid">'+design.needs(p.food,"Сытость","feed")+design.needs(p.joy,"Настроение","heart")+
+    design.needs(p.energy,"Энергия","bolt")+'</div>'+
+    '<div class="xp-hud"><b>'+icon("star")+p.xp+' XP</b><small>'+
+    (p.next_xp==null?"Макс. уровень":"До следующего: "+Math.max(0,target-p.xp)+' XP')+'</small>'+
+    '<progress class="game-progress" max="100" value="'+progress+'" aria-label="Опыт текущего уровня">'+progress+'%</progress></div>'+
+    '<p class="mood-caption">'+safe(p.mood||"У питомца всё хорошо")+'</p></section>';
 }
 function weeklyChapter(p) {
   const chapter = p.chapter;
@@ -307,14 +315,17 @@ function home(p) {
     const hint = wait>0 ? "через "+duration(wait) : (blocked ? "Недоступно" : "Можно сейчас");
     return '<button class="btn care-button" data-action="care" data-code="'+safe(action.code)+'" '+
       (disabled?'disabled ':'')+'title="'+safe(state.blocked_reason||hint)+'">'+
-      '<span>'+safe(action.name)+'</span><small>'+(disabled?safe(hint):'✓ Готово')+'</small></button>';
+      '<span class="care-emblem" aria-hidden="true">'+icon(action.code)+'</span>'+
+    '<span class="care-name">'+safe(({feed:"Покормить",play:"Поиграть",sleep:"Уложить"})[action.code]||action.name)+'</span>'+
+    '<small>'+(disabled?safe(hint):'Готово')+'</small></button>';
   }).join("");
-  return hero(p)+'<div class="panel"><div class="eyebrow">ЕЖЕДНЕВНЫЙ УХОД</div>'+
-    '<h2 class="h2">Позаботьтесь о '+safe(p.name)+'</h2>'+
-    '<div class="buttons">'+actions+'</div></div>'+
-    '<div class="notice">'+(p.today_fed
-      ? "✅ Сегодня ваша пара уже поддержала серию!"
-      : "🕊 Напишите друг другу в чате, чтобы поддержать серию общения.")+'</div>'+
+  return hero(p)+'<section class="care-dock"><div class="care-dock-title"><strong>Ежедневный уход</strong><small>Забота для двоих</small></div>'+
+    '<div class="buttons">'+actions+'</div></section>'+
+    '<div class="pair-status'+(p.today_fed?' pair-complete':'')+'">'+icon(p.today_fed?"check":"heart")+
+    '<span>'+(p.today_fed?"Сегодня вы уже поддержали серию!":
+      p.partner_wrote_today?"Партнёр уже написал сегодня. Ответь в чате, чтобы поддержать серию.":
+      p.user_cared?"Ты уже написал сегодня. Ждём ответа партнёра.":
+      "Напишите друг другу в чате, чтобы поддержать серию.")+'</span></div>'+
     '<div class="home-shortcuts">'+
     hubCard("tasks","📋","Задания дня",p.daily.filter(t=>t.done&&!t.claimed).length
       ? "Есть награды к получению" : "Три совместных задания")+
@@ -327,9 +338,9 @@ function home(p) {
 }
 function hubCard(route, icon, title, detail) {
   return '<button type="button" class="hub-card" data-tab="'+safe(route)+'">'+
-    '<span class="hub-icon" aria-hidden="true">'+safe(icon)+'</span>'+
+    '<span class="hub-icon" aria-hidden="true">'+design.routeIcon(route)+'</span>'+
     '<span class="hub-copy"><strong>'+safe(title)+'</strong><small>'+safe(detail)+'</small></span>'+
-    '<span class="hub-arrow" aria-hidden="true">›</span></button>';
+    '<span class="hub-arrow" aria-hidden="true">'+design.icon("arrow")+'</span></button>';
 }
 function hub(title, description, cards) {
   return '<div class="section-heading">'+safe(title)+'</div><p class="section-lead">'+
@@ -367,7 +378,7 @@ function club(p) {
   ]);
 }
 function quickAccess() {
-  return '<div class="quick-access"><button type="button" class="btn btn-quiet" data-tab="inventory">🎒 Рюкзак</button></div>';
+  return '<div class="quick-access"><button type="button" class="btn btn-quiet" data-tab="inventory">'+icon("bag")+' Рюкзак</button></div>';
 }
 function routeLoot(route, p) {
   if (!route) return '<span class="muted">Нет данных</span>';
@@ -535,11 +546,13 @@ function wardrobe(p) {
 function render() {
   if (!ui.pet) return;
   const p=ui.pet;
-  wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
+  const balanceMarkup=icon("candy")+'<b>'+p.balance+'</b>';
+  if(wallet.innerHTML!==balanceMarkup) wallet.innerHTML=balanceMarkup;
   nav.classList.remove("hidden");
-  nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
+  const navMarkup=tabs.map(([id,_emoji,label])=>'<button class="nav-btn '+
     (navigation.activeRoot()===id?'active':'')+'" data-root="'+id+'"'+
-    (navigation.activeRoot()===id?' aria-current="page"':'')+'><span>'+icon+'</span>'+label+'</button>').join("");
+    (navigation.activeRoot()===id?' aria-current="page"':'')+'><span class="nav-symbol">'+design.routeIcon(id)+'</span>'+label+'</button>').join("");
+  if(nav.dataset.rendered!==navMarkup){nav.innerHTML=navMarkup;nav.dataset.rendered=navMarkup;}
   app.innerHTML='<div class="game-tools">'+renderPicker()+(ui.tab==="inventory"?"":quickAccess())+'</div>'+({
     home,profile,world,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
@@ -738,7 +751,7 @@ function syncTimers() {
       btn.disabled = disabled;
       const hint = btn.querySelector("small");
       if (hint) hint.textContent = remaining>0 ? "через "+duration(remaining)
-        : info.blocked_reason ? "Недоступно" : "✓ Готово";
+        : info.blocked_reason ? "Недоступно" : "Готово";
       btn.title = info.blocked_reason || (remaining>0 ? "Повтори позже" : "Можно сейчас");
     }
   }
@@ -1018,7 +1031,10 @@ async function boot() {
   try {
     TG?.ready();
     TG?.expand();
+    try {TG?.setHeaderColor?.("#213b33");TG?.setBackgroundColor?.("#101d20");TG?.setBottomBarColor?.("#172c27");}catch{}
     syncSafeArea();
+    const brandMark=document.querySelector(".brand-mark");
+    if(brandMark) brandMark.innerHTML=icon("paw");
     if(!TG?.initData) throw new Error("Открой Mini App через кнопку бота в Telegram.");
     ui.config=await api("/api/bootstrap");
     ui.pets=ui.config.pets;
@@ -1045,7 +1061,12 @@ async function boot() {
 }
 // Refresh shared pet state when returning from another Telegram tab / chat.
 try { TG?.onEvent?.("activated", () => refreshPet({force:true})); } catch {}
+function syncMotion() {
+  document.documentElement.classList.toggle("motion-paused",document.hidden);
+}
+syncMotion();
 document.addEventListener("visibilitychange", () => {
+  syncMotion();
   if(!document.hidden) {
     refreshPet();
     if(ui.tab==="market") loadMarket({force:true});
@@ -1057,6 +1078,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
 window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
 setInterval(() => {
+  if(document.hidden) return;
   syncTimers();
   refreshPet();
 }, 15000);
