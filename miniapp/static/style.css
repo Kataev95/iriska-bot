@@ -172,3 +172,21 @@ button{font:inherit;cursor:pointer} button:disabled{cursor:not-allowed;opacity:.
 .material-cost.missing { color:#ffbaaa; }
 .craft-icon { font-size:29px;background:#3b3459; }
 @media(max-width:355px) { .inventory-total { align-items:flex-start;flex-direction:column; } }
+
+/* PETS WORLD 2.0 / stage 1: a compact, stable navigation shell. */
+.game-tools{display:flex;gap:8px;align-items:flex-start;margin:0 0 12px}
+.game-tools:empty{display:none}
+.game-tools .picker-container{flex:1;min-width:0;margin:0}
+.game-tools .picker{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:44px}
+.quick-access{margin-left:auto;flex-shrink:0}
+.quick-access .btn{min-height:44px;padding:8px 12px}
+.hub-list,.home-shortcuts{display:grid;gap:8px;margin:12px 0}
+.hub-card{width:100%;display:grid;grid-template-columns:44px minmax(0,1fr) 18px;align-items:center;gap:12px;text-align:left;min-height:72px;padding:11px 12px;color:var(--text);background:var(--pane);border:1px solid var(--border);border-radius:16px;transition:transform .12s,background .15s}
+.hub-card:active{transform:scale(.985);background:var(--pane-solid)}
+.hub-card:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.hub-icon{width:44px;height:44px;display:grid;place-items:center;font-size:23px;background:#354363;border-radius:13px}
+.hub-copy{display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}
+.hub-copy strong{font-size:14px;line-height:1.25}
+.hub-copy small{color:var(--muted);font-size:12px;line-height:1.35}
+.hub-arrow{font-size:25px;color:var(--muted);text-align:center}
+@media(max-width:350px){.hub-card{gap:8px;padding:9px}.quick-access .btn{font-size:12px;padding:8px}.nav-btn{font-size:9px}}

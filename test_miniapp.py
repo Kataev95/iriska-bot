@@ -695,10 +695,11 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn('care_state', js)
         self.assertIn("trips_remaining", js)
         self.assertIn("syncClock(snapshot)", js)
-        self.assertIn("/static/style.css?v=5", html)
+        self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=1", html)
-        self.assertIn("/static/app.js?v=12", html)
+        self.assertIn("/static/app.js?v=13", html)
+        self.assertIn("/static/navigation.js?v=1", html)
         self.assertIn("/static/studio.js?v=2", html)
         self.assertIn("/static/studio.css?v=2", html)
         self.assertIn("/static/season.js?v=1", html)
@@ -736,7 +737,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('safeAreaInset', js)
         self.assertIn('contentSafeAreaInset', js)
         self.assertIn('window.PetsHouse.renderHouse(p,ui.config)', js)
-        self.assertIn('data-click="house"', js)
+        self.assertIn('hubCard("house"', js)
         self.assertIn('data-build-room=', (static/"house.js").read_text(encoding="utf-8"))
         self.assertIn('house-scene', (static/"house.css").read_text(encoding="utf-8"))
         self.assertIn('window.PetsBusiness.renderBusiness', js)
@@ -759,6 +760,53 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('studio-memory', (static/"studio.js").read_text(encoding="utf-8"))
         self.assertIn('studio-hero-sticker', js)
 
+    def test_navigation_history_and_root_ownership(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script = Path(__file__).resolve().parent / "miniapp" / "static" / "navigation.js"
+        code = """
+const assert = require("node:assert/strict");
+const navigation = require(process.argv[1]);
+assert.deepEqual(navigation.tabs.map(x => x[0]), ["home","world","games","trade","club"]);
+const nav = navigation.create();
+assert.equal(nav.current(), "home");
+assert.equal(nav.open("profile"), "profile");
+assert.equal(nav.open("studio"), "studio");
+assert.equal(nav.activeRoot(), "home");
+assert.equal(nav.back(), "profile");
+assert.equal(nav.back(), "home");
+assert.equal(nav.select("world"), "world");
+assert.equal(nav.open("trips"), "trips");
+assert.equal(nav.open("inventory"), "inventory");
+assert.equal(nav.activeRoot(), "world");
+assert.equal(nav.back(), "trips");
+assert.equal(nav.open("studio"), "studio");
+assert.equal(nav.activeRoot(), "home");
+assert.equal(nav.back(), "trips");
+assert.equal(nav.select("club"), "club");
+assert.equal(nav.open("season"), "season");
+assert.equal(nav.open("league"), "league");
+assert.equal(nav.activeRoot(), "club");
+assert.equal(nav.open("season"), "season");
+assert.equal(nav.back(), "club");
+assert.equal(nav.back(), "home");
+assert.equal(nav.select("games"), "games");
+assert.equal(nav.open("business"), "business");
+assert.equal(nav.activeRoot(), "games");
+assert.equal(nav.select("trade"), "trade");
+assert.equal(nav.open("market"), "market");
+assert.equal(nav.activeRoot(), "trade");
+assert.equal(nav.open("unknown"), "market");
+assert.equal(nav.back(), "trade");
+assert.equal(nav.back(), "home");
+"""
+        cp = subprocess.run(["node", "-e", code, str(script)], capture_output=True,
+                            text=True, timeout=15, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -766,7 +814,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
