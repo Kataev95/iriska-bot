@@ -319,6 +319,16 @@ async def get_pet(request: web.Request):
                                             request.app["config"], uid, pet_id))
 
 
+async def get_countryside(request: web.Request):
+    uid = current_user(request)["user_id"]
+    pet_id = int(request.match_info["pet_id"])
+    db, cfg = request.app["db"], request.app["config"]
+    await own_pet(db, uid, pet_id)
+    now = time.time()
+    state = await db.countryside_state(pet_id, datetime.fromtimestamp(now, cfg.tz).date().isoformat())
+    return web.json_response({"countryside": state, "server_time": time.time()})
+
+
 async def get_league(request: web.Request):
     user_id = current_user(request)["user_id"]
     pet_id = int(request.match_info["pet_id"])
@@ -520,6 +530,7 @@ def create_app(db, config) -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/api/bootstrap", bootstrap)
     app.router.add_get(r"/api/pet/{pet_id:\d+}", get_pet)
+    app.router.add_get(r"/api/countryside/{pet_id:\d+}", get_countryside)
     app.router.add_get(r"/api/market/{pet_id:\d+}", get_market)
     app.router.add_get(r"/api/league/{pet_id:\d+}", get_league)
     app.router.add_get(r"/api/season/{pet_id:\d+}", get_season)
