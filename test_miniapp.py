@@ -451,6 +451,7 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         data=await r.json()
         self.assertEqual(data["pet"]["balance"],24)
         self.assertEqual(data["pet"]["businesses"]["sales_coins_remaining"],8)
+        self.assertTrue(data["pet"]["businesses"]["units"]["florist"]["order_done"])
         self.assertEqual(data["pet"]["businesses"]["units"]["florist"]["stock"],0)
 
     async def test_market_auth_escrow_and_balance_transfer(self):
@@ -1023,6 +1024,9 @@ assert.match(html,/data-business-collect="florist"[^>]*disabled/);
 html=t.renderBusiness(p,c,101,"florist");
 assert.match(html,/data-tycoon-tap="florist"[^>]*disabled/);
 assert.match(html,/Забрать партию/);
+p.businesses.units.florist.order_done=true;
+html=t.renderBusiness(p,c,101,"florist");
+assert.match(html,/data-tycoon-order="florist"[^>]*disabled[^>]*>✓ Выполнен/);
 """
         cp = subprocess.run(["node", "-e", code, str(script)], capture_output=True,
                             text=True, timeout=15, check=False)
