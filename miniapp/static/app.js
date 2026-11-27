@@ -269,7 +269,7 @@ function weeklyChapter(p) {
     action = '<p class="subtitle">На указатель уйдёт 1 материал: '+safe(material?.name||"")+'.</p>'+
       (stocked
         ? '<button class="btn btn-primary" data-action="chapter_craft" data-code="'+safe(chapter.code)+'">Собрать в мастерской</button>'
-        : '<button class="btn btn-quiet" data-tab="trips">В поход за материалом</button>');
+        : '<p class="subtitle">Выберите поход за нужным материалом ниже.</p>');
   } else if (trip && trip.id === chapter.trip_id) {
     const left = Math.max(0,trip.finish_at-serverNow());
     action = left
@@ -402,7 +402,7 @@ function tripRoutes(p) {
   return '<div class="section-heading">🧭 Приключения</div>'+
     '<p class="section-lead">Выбирай маршрут, собирай награды и повышай уровень питомца.</p>'+
     '<div class="notice">🎟 Походов осталось сегодня: <b>'+value(p.trips_remaining ?? 3)+'/3</b></div>'+
-    '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>'+
+
     ui.config.routes.map(r => {
       const bonusXp = p.profession === "explorer" ? Math.floor(r.xp*1.2) : r.xp;
       const energy = r.energy-(p.profession==="artisan" ? 3:0);
@@ -540,7 +540,7 @@ function render() {
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
     (navigation.activeRoot()===id?'active':'')+'" data-root="'+id+'"'+
     (navigation.activeRoot()===id?' aria-current="page"':'')+'><span>'+icon+'</span>'+label+'</button>').join("");
-  app.innerHTML=renderPicker()+(ui.tab==="inventory"?"":quickAccess())+({
+  app.innerHTML='<div class="game-tools">'+renderPicker()+(ui.tab==="inventory"?"":quickAccess())+'</div>'+({
     home,profile,world,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow()),
