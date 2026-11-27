@@ -15,7 +15,7 @@ from pathlib import Path
 from aiohttp import web
 
 from miniapp.auth import Unauthorized, validate_init_data
-from pet_care import ACTIONS, SHOP, SHOP_BY_CODE, check_action, image_key, mood_text, parse_set
+from pet_care import ACTIONS, SHOP, SHOP_BY_CODE, check_action, image_key, image_path, mood_text, parse_set
 from pet_game import (DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS,
                       growth_days, level_for, next_level_xp, xp_for_level)
 from pet_inventory import MATERIALS, RECIPES, loot_for
@@ -146,6 +146,18 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         float(pet["food"]), float(pet["joy"]), float(pet["energy"]),
         datetime.fromtimestamp(now, cfg.tz).hour, None,
     )
+    portrait_reactions = {}
+    if int(pet["best_streak"]) > 0:
+        # Offer only the existing, server-selected species art. These URLs
+        # are optional cosmetic expressions, never game state or rewards.
+        for expression in ("happy", "sleep"):
+            key = image_key(
+                pet["species"], growth_days(pet), int(pet["best_streak"]),
+                float(pet["food"]), float(pet["joy"]), float(pet["energy"]),
+                hour, expression,
+            )
+            if image_path(key):
+                portrait_reactions[expression] = f"/assets/pets/{key}.jpg"
     return {
         "id": pet_id, "name": pet["name"] or species_by_code(pet["species"]).title,
         "season_title": equipped_title,
@@ -153,6 +165,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "chapter": await db.chapter_state(pet_id),
         "species": pet["species"], "stage_days": growth_days(pet),
         "image": f"/assets/pets/{current_image}.jpg",
+        "portrait_reactions": portrait_reactions,
         "partner": partner_name,
         "xp": current_xp, "level": level_for(current_xp),
         "level_start_xp": xp_for_level(level_for(current_xp)),
