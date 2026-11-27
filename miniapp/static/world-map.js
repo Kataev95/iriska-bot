@@ -11,7 +11,7 @@
     {id:"business",name:"Tycoon",route:"business",icon:"🏭",description:"Ручное производство, оборудование, работники и заказы."},
     {id:"shop",name:"Магазин",route:"shop",icon:"🛍️",description:"Еда, аксессуары и улучшения за ириски."},
     {id:"market",name:"Рынок",route:"market",icon:"🏪",description:"Покупайте и продавайте ресурсы и товары с игроками своего чата."},
-    {id:"arcade",name:"Аркады",kind:"future",icon:"🎮",description:"Короткие мини-игры для питомцев.",stage:"Будущий этап · аркадные игры"}
+    {id:"arcade",name:"Аркады",route:"arcade",icon:"🎮",description:"Ловля предметов, память, лабиринт и реакция. Ставьте рекорды и получайте опыт."}
   ].map(Object.freeze));
   const get=id=>places.find(x=>x.id===id)||places.find(x=>x.id==="house");
   const valid=id=>places.some(x=>x.id===id);
@@ -36,6 +36,10 @@
       if(cast&&now>=cast.bite_at&&now<=cast.expires_at)return {text:"Клюёт!",tone:"reward"};
       if(cast&&now<cast.bite_at)return {text:"Ждём клёва",tone:"active"};
       return {text:p.best_streak?"Рыбалка":"После вылупления",tone:"open"};
+    }
+    if(place.id==="arcade"){
+      if(p.arcade?.active&&now<=p.arcade.active.expires_at)return {text:"В игре",tone:"active"};
+      return {text:p.best_streak?"Играть":"После вылупления",tone:"open"};
     }
     if(place.id==="business"){
       const units=p.businesses?.units||{};

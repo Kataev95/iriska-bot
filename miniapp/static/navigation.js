@@ -8,7 +8,7 @@
   const owners = Object.freeze({
     home:"home", profile:"home", growth:"home", wardrobe:"home", studio:"home",
     world:"world", trips:"world", house:"world", farm:"world", fishing:"world",
-    games:"games", tasks:"games", business:"games",
+    games:"games", tasks:"games", business:"games", arcade:"games",
     trade:"trade", shop:"trade", market:"trade",
     club:"club", season:"club", league:"club", inventory:null
   });

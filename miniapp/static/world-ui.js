@@ -31,7 +31,7 @@
   });
   const routes=Object.freeze({home:"paw",world:"world",games:"games",trade:"trade",club:"club",
     profile:"profile",growth:"star",wardrobe:"wardrobe",studio:"studio",trips:"compass",
-    house:"house",business:"business",tasks:"task",shop:"shop",market:"trade",league:"club",season:"calendar",inventory:"bag"});
+    house:"house",business:"business",arcade:"games",tasks:"task",shop:"shop",market:"trade",league:"club",season:"calendar",inventory:"bag"});
   function icon(name){
     const body=Object.prototype.hasOwnProperty.call(paths,name)?paths[name]:paths.star;
     return '<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'+body+'</svg>';
