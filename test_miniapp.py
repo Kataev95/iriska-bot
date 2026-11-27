@@ -465,9 +465,9 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(other["arcade"]["records"]["memory"]["best"],100)
 
     async def test_arcade_all_games_limits_and_persistence(self):
-        from pet_arcade import new_game, advance, DIRECTIONS, shortest_path
+        from pet_arcade import DIRECTIONS, shortest_path
         tz=self.config.tz
-        now=time.time()
+        now=datetime.now(tz).replace(hour=12,minute=0,second=0,microsecond=0).timestamp()
         before=(await self.db.get_pet(1))["xp"]
         last=0
         async def start(game,at):
