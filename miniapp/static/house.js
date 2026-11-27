@@ -66,9 +66,7 @@ function renderHouse(p, config) {
     '<div class="panel house-overview"><div class="row"><div><div class="eyebrow">МОЙ ДОМ</div>'+
       '<div class="title">🏡 Уютное гнёздышко</div></div>'+
       '<span class="chip chip-purple">🧱 '+total+' / 6</span></div>'+
-      '<div class="progress house-progress" role="progressbar" aria-label="Строительство домика" '+
-      'aria-valuemin="0" aria-valuemax="6" aria-valuenow="'+total+'">'+
-      '<i style="width:'+Math.round(total/6*100)+'%"></i></div>'+
+      '<progress class="game-progress house-progress" aria-label="Строительство домика" max="6" value="'+total+'">'+total+' / 6</progress>'+
       '<p class="subtitle">Домик куплен. Материалы добываются в приключениях.</p></div>'+
     '<h2 class="h2 house-rooms-title">✨ Комнаты</h2>'+cards+
     '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и материалы →</button>'+
