@@ -19,10 +19,10 @@ from pet_care import (
 from pet_game import DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS, legacy_xp, level_for
 from pet_inventory import MATERIALS, RECIPES, loot_for, loot_summary
 from pet_home import MAX_ROOM_LEVEL, ROOMS, room_effect, route_loot
-from pet_arcade_db import PetArcadeDatabase
+from pet_progression_db import PetProgressionDatabase
 
 
-class PetGameDatabase(PetArcadeDatabase):
+class PetGameDatabase(PetProgressionDatabase):
     async def _migrate_pet_game(self):
         db = self._require()
         cols = {
@@ -132,6 +132,7 @@ class PetGameDatabase(PetArcadeDatabase):
         await self._migrate_business()
         await self._migrate_countryside()
         await self._migrate_arcade()
+        await self._migrate_progression()
         await self._migrate_seasons()
         await self._migrate_studio()
 
@@ -236,12 +237,13 @@ class PetGameDatabase(PetArcadeDatabase):
                 "INSERT INTO pet_actions VALUES(?,?,?,?) ON CONFLICT(pet_id,user_id,action) DO UPDATE SET ts=excluded.ts",
                 (pet_id, user_id, action, now),
             )
+            bonuses = await self._progression_effects(db, pet)
             await db.execute(
                 "UPDATE pets SET food=?,joy=?,energy=? WHERE id=?",
                 (
-                    clamp(pet["food"] + act.food),
+                    clamp(pet["food"] + act.food + (bonuses["feed"] if action == "feed" else 0)),
                     clamp(pet["joy"] + act.joy + (TOGETHER_JOY if together else 0)),
-                    clamp(pet["energy"] + act.energy),
+                    clamp(pet["energy"] + act.energy + (bonuses["sleep"] if action == "sleep" else 0)),
                     pet_id,
                 ),
             )
@@ -358,11 +360,12 @@ class PetGameDatabase(PetArcadeDatabase):
             if count >= DAILY_START_LIMIT:
                 return "Сегодня уже начаты 3 похода. Новые — завтра"
             pet = await self._game_refresh(db, pet, now, tz)
-            energy = r.energy - (3 if pet["profession"] == "artisan" else 0)
+            bonuses = await self._progression_effects(db, pet)
+            energy = max(1, r.energy - bonuses["trip_energy"])
             if pet["food"] < 20 or pet["energy"] < energy:
                 return f"Нужно 20 сытости и {energy} энергии. Покорми питомца или уложи спать"
-            xp = r.xp * 120 // 100 if pet["profession"] == "explorer" else r.xp
-            coins = r.coins + (1 if pet["profession"] == "merchant" else 0)
+            xp = r.xp * bonuses["trip_xp_percent"] // 100
+            coins = r.coins + bonuses["trip_coins"]
             await db.execute(
                 "UPDATE pets SET food=food-5,energy=energy-? WHERE id=?",
                 (energy, pet_id),
