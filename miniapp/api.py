@@ -419,7 +419,8 @@ async def action(request: web.Request):
         result = await db.hire_tycoon_worker(pet_id, uid, code, payload["expected_level"])
     elif kind in ("business_sell", "tycoon_order") and code in BUSINESSES:
         result = await db.sell_business_goods(
-            pet_id, uid, code, now, cfg.tz, order=kind == "tycoon_order"
+            pet_id, uid, code, now, cfg.tz, order=kind == "tycoon_order",
+            expected_stock=payload.get("expected_stock"),
         )
     elif kind == "studio_equip":
         result = await db.equip_studio_style(
