@@ -44,8 +44,6 @@ const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
   "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
 }[c]));
 const value = n => Math.max(0, Math.round(Number(n || 0)));
-const stat = (icon,title,amount) => '<div class="stat '+(value(amount)<30?'is-low':value(amount)<60?'is-medium':'')+'"><span>'+icon+' '+title+'</span>'+
-  '<strong>'+value(amount)+'%</strong><div class="progress"><i style="width:'+Math.min(value(amount),100)+'%"></i></div></div>';
 const serverNow = () => (Date.now() + ui.clockDelta) / 1000;
 const syncClock = p => {if(Number.isFinite(Number(p.server_time))) ui.clockDelta = p.server_time*1000-Date.now();};
 function duration(seconds) {
@@ -435,13 +433,11 @@ function tasks(p) {
   const claimable = p.daily.some(x=>x.done&&!x.claimed);
   const done = p.daily.filter(x=>x.done).length;
   const count = p.daily.length;
-  const percent = count ? Math.round(done/count*100) : 0;
   return '<div class="section-heading">📋 Ежедневные задания</div>'+
     '<p class="section-lead">Выполняйте действия вдвоём. Опыт общий у питомца.</p>'+
     '<div class="panel task-summary"><div class="row"><strong>🌟 Прогресс дня</strong>'+
        '<span class="chip chip-green">'+done+' / '+count+'</span></div>'+
-       '<div class="progress task-progress" role="progressbar" aria-label="Выполненные задания" aria-valuemin="0" aria-valuemax="'+count+'" aria-valuenow="'+done+'">'+
-       '<i style="width:'+percent+'%"></i></div>'+
+       '<progress class="game-progress task-progress" aria-label="Выполненные задания" max="'+Math.max(1,count)+'" value="'+done+'">'+done+' / '+count+'</progress>'+
        '<p class="subtitle">'+(done===count?'Все задания выполнены!':'Продолжай ухаживать и путешествовать')+'</p></div>'+
     p.daily.map(t=>'<div class="panel"><div class="card-row"><div class="card-icon">'+
       (t.claimed?'🎁':t.done?'✅':'▫️')+'</div><div class="card-text"><strong>'+
@@ -481,7 +477,7 @@ function growth(p) {
     '<div class="panel"><div class="eyebrow">СПЕЦИАЛИЗАЦИЯ</div><div class="h2">🎓 Профессия</div>'+
     (p.profession?'<div class="notice">✅ '+safe(p.profession_title)+' · выбрана для обоих хозяев</div>':
       p.level<5?'<div class="notice">🔒 Откроется на 5-м уровне.</div>':
-      ui.config.professions.map(job=>'<div class="card-row" style="margin-top:14px">'+
+      ui.config.professions.map(job=>'<div class="card-row profession-row">'+
         '<div class="card-text"><strong>'+safe(job.name)+'</strong><small>'+safe(job.effect)+'</small></div>'+
         '<button class="btn btn-primary" data-profession="'+safe(job.code)+'">Выбрать</button></div>').join("")
     )+'</div>';
