@@ -320,6 +320,7 @@ function petDashboard(p){
   return '<section class="panel pet-dashboard"><div class="pet-identity"><div class="pet-identity-main">'+
     '<div class="hero-title">'+safe(p.name)+'</div><div class="pet-partner">'+icon("heart")+
     'Вместе с '+safe(p.partner)+'</div>'+
+    (p.progression?.evolution?'<div class="chip chip-green">'+safe(p.progression.evolution.icon+" "+p.progression.evolution.name)+'</div>':'')+
     (p.season_title?'<div class="chip chip-purple season-name-tag">'+safe(p.season_title)+'</div>':'')+
     '</div><div class="streak-pill" aria-label="Серия '+p.streak+' дней">'+icon("flame")+p.streak+' дн.</div></div>'+
     '<div class="need-grid">'+design.needs(p.food,"Сытость","feed")+design.needs(p.joy,"Настроение","heart")+
@@ -1399,7 +1400,7 @@ document.addEventListener("click", async e=>{
       }).join(", ");
       confirmDialog("Запустить производство?",
         "Ресурсы с общего склада: "+cost+". Товары можно забрать через "+
-        window.PetsBusiness.duration(window.PetsBusiness.workerDuration(unit,ui.pet.businesses?.units?.[unit.code]||{},ui.config.tycoon_rules||{}))+". Можно ускорить партию нажатиями.",
+        window.PetsBusiness.duration(window.PetsBusiness.workerDuration(unit,ui.pet.businesses?.units?.[unit.code]||{},ui.config.tycoon_rules||{},ui.pet.progression?.effects.production_percent??100))+". Можно ускорить партию нажатиями.",
         ()=>perform("business_start",unit.code));
     }
     return;
