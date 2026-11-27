@@ -24,7 +24,6 @@
     const starts=n(economy.starts_remaining), allowed=n(economy.sales_coins_remaining);
     const maxStarts=n(config.business_limits?.production_starts || 4);
     const maxCoins=n(config.business_limits?.sales_coins || 12);
-    const progress=Math.round((maxStarts-starts)/Math.max(1,maxStarts)*100);
     const head='<div class="section-heading">🏪 Бизнесы '+esc(p.name)+'</div>'+
       '<p class="section-lead">Ваша семейная экономика: добывайте материалы, запускайте '+
       'производство и продавайте товары за ириски внутри игры.</p>'+
@@ -34,9 +33,7 @@
       '<div class="business-limit-grid"><div><strong>'+starts+' / '+maxStarts+
       '</strong><small>Запусков осталось</small></div><div><strong>🍬 '+allowed+' / '+maxCoins+
       '</strong><small>Можно заработать</small></div></div>'+
-      '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="'+maxStarts+
-      '" aria-valuenow="'+(maxStarts-starts)+'" aria-label="Запуски за день">'+
-      '<i style="width:'+progress+'%"></i></div></div>';
+      '<progress class="game-progress business-progress" aria-label="Запуски за день" max="'+Math.max(1,maxStarts)+'" value="'+Math.max(0,maxStarts-starts)+'"></progress></div>';
     const cards=config.businesses.map(b=>{
       const state=economy.units?.[b.code] || {level:0,stock:0,job:null};
       const lv=n(state.level);
