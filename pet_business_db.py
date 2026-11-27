@@ -353,6 +353,8 @@ class PetBusinessDatabase(PetMarketDatabase):
                 (pet_id, code),
             )).fetchone()
             seconds = production_duration(code, int(workers["level"]) if workers else 0)
+            bonuses = await self._progression_effects(db, pet)
+            seconds = max(1, seconds * bonuses["production_percent"] // 100)
             await db.execute(
                 "INSERT INTO pet_business_jobs("
                 "pet_id,business,user_id,day,started_at,finish_at,output_qty) "
