@@ -41,12 +41,15 @@ const worldMap = window.PetsMap;
 const country = window.PetsCountryside;
 const arcade = window.PetsArcade;
 const progression = window.PetsProgression;
+const runtime = window.PetsRuntime;
+const readGate = runtime.createReadGate();
 const icon = design.icon;
 const life = window.PetsLife;
 const reactionGate = life.createGate();
 let reactionTimer = null;
 let inactive = false;
 const motionHidden = () => document.hidden || inactive;
+const online = () => window.navigator?.onLine !== false;
 const emoji = {food:"🍪",wear:"🎀",freeze:"🧊",house:"🏠"};
 const resourceQuantity = (p, code) => Math.max(0,Number(p.materials?.[code] || 0));
 const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
@@ -680,8 +683,12 @@ function render() {
     syncWorldMap();
     return;
   }
-  clearPetReaction();
-  app.innerHTML=tools+({
+  if(!app.querySelector("[data-feature-screen]")){
+    clearPetReaction();
+    app.innerHTML='<div data-feature-tools></div><div data-feature-screen></div>';
+  }
+  patchHome("[data-feature-tools]",tools);
+  const markup=({
     profile,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
     farm: p => country.farm(p,ui.config.countryside,serverNow(),ui.seedCode),
@@ -694,6 +701,7 @@ function render() {
     season: p => window.PetsSeason.renderSeason(ui.season,p,serverNow()),
     studio: p => window.PetsStudio.renderStudio(ui.studio,p,ui.studioMode)
   }[ui.tab]||home)(p);
+  patchHome("[data-feature-screen]",markup);
 }
 function patchHome(selector,markup){
   const node=app.querySelector(selector);
@@ -713,26 +721,32 @@ function setPet(snapshot) {
 // A background GET is never allowed to overwrite the result of a POST.
 async function loadPet(id) {
   if (ui.busy) {showToast("Сначала заверши текущее действие"); return;}
-  const serial = ++ui.syncSerial;
+  ui.busy=true;app.classList.add("is-busy");
+  const serial = ++ui.syncSerial, ticket=readGate.begin();
   ui.syncing = true;
   try {
     const pet = await api('/api/pet/'+id);
     if (serial !== ui.syncSerial) return;
     ui.selected = id;
     ui.picker = false;
-    ui.market=null; ui.marketFetchedAt=0; ++ui.marketRequest;
-    ui.league=null; ui.leagueFetchedAt=0; ++ui.leagueRequest;
-    ui.season=null; ui.seasonFetchedAt=0; ++ui.seasonRequest;
-    ui.studio=null; ui.studioFetchedAt=0; ++ui.studioRequest;
+    ui.market=null; ui.marketLoading=false; ui.marketFetchedAt=0; ++ui.marketRequest;
+    ui.league=null; ui.leagueLoading=false; ui.leagueFetchedAt=0; ++ui.leagueRequest;
+    ui.season=null; ui.seasonLoading=false; ui.seasonFetchedAt=0; ++ui.seasonRequest;
+    ui.studio=null; ui.studioLoading=false; ui.studioFetchedAt=0; ++ui.studioRequest;
     setPet(pet);
-  } finally {ui.syncing = false;}
+  } finally {
+    readGate.finish(ticket);ui.syncing=readGate.busy();
+    ui.busy=false;app.classList.remove("is-busy");
+    wakeScheduler();
+  }
+  if(ui.selected===id)loadVisibleFeature();
 }
 async function refreshPet({force=false,quiet=true} = {}) {
-  if (!ui.selected || !TG?.initData || ui.busy || ui.syncing || motionHidden() ||
+  if (!ui.selected || !TG?.initData || ui.busy || ui.syncing || motionHidden() || !online() ||
       !modal.classList.contains("hidden")) return;
   if(!force&&ui.tab==="arcade"&&ui.pet?.arcade?.active?.mine&&serverNow()<=ui.pet.arcade.active.expires_at)return;
   if (!force && Date.now()-ui.lastSync < 55000) return;
-  const id = ui.selected, serial = ++ui.syncSerial;
+  const id = ui.selected, serial = ++ui.syncSerial, ticket=readGate.begin();
   ui.syncing = true;
   try {
     const pet = await api('/api/pet/'+id);
@@ -740,12 +754,12 @@ async function refreshPet({force=false,quiet=true} = {}) {
       setPet(pet);
     }
   } catch(e) {if(!quiet) showToast(e.message);}
-  finally {ui.syncing = false;}
+  finally {readGate.finish(ticket);ui.syncing=readGate.busy();}
 }
 async function refreshCountryside(){
-  if(!ui.selected||!TG?.initData||ui.busy||ui.syncing||motionHidden()||
+  if(!ui.selected||!TG?.initData||ui.busy||ui.syncing||motionHidden()||!online()||
      !modal.classList.contains("hidden")||!["farm","fishing"].includes(ui.tab))return;
-  const id=ui.selected,serial=++ui.syncSerial;
+  const id=ui.selected,serial=++ui.syncSerial,ticket=readGate.begin();
   ui.syncing=true;
   try{
     const result=await api("/api/countryside/"+id);
@@ -757,12 +771,12 @@ async function refreshCountryside(){
     }else syncClock(result);
     syncCountryside();
   }catch{/* The next refresh retries; do not interrupt a fishing session with a toast. */}
-  finally{ui.syncing=false;}
+  finally{readGate.finish(ticket);ui.syncing=readGate.busy();}
 }
 async function refreshArcade(){
-  if(!ui.selected||!TG?.initData||ui.busy||ui.syncing||motionHidden()||
+  if(!ui.selected||!TG?.initData||ui.busy||ui.syncing||motionHidden()||!online()||
      !modal.classList.contains("hidden")||ui.tab!=="arcade")return;
-  const id=ui.selected,serial=++ui.syncSerial;
+  const id=ui.selected,serial=++ui.syncSerial,ticket=readGate.begin();
   ui.syncing=true;
   try{
     const result=await api("/api/arcade/"+id);
@@ -773,10 +787,10 @@ async function refreshArcade(){
     }
     syncArcade();
   }catch{/* Retry on next entry or refresh. */}
-  finally{ui.syncing=false;}
+  finally{readGate.finish(ticket);ui.syncing=readGate.busy();}
 }
 async function loadMarket({force=false,quiet=true}={}) {
-  if(!ui.selected || !TG?.initData || document.hidden || (ui.marketLoading&&!force)) return;
+  if(!ui.selected || !TG?.initData || motionHidden() || !online() || (ui.marketLoading&&!force)) return;
   if(!force && ui.market && Date.now()-ui.marketFetchedAt<60000) return;
   const id=ui.selected, serial=++ui.marketRequest;
   ui.marketLoading=true;
@@ -788,10 +802,10 @@ async function loadMarket({force=false,quiet=true}={}) {
     }
   } catch(e) {
     if(!quiet) showToast(e.message);
-  } finally {ui.marketLoading=false;}
+  } finally {if(serial===ui.marketRequest)ui.marketLoading=false;}
 }
 async function loadLeague({force=false,quiet=true}={}) {
-  if(!ui.selected || !TG?.initData || document.hidden || (ui.leagueLoading&&!force)) return;
+  if(!ui.selected || !TG?.initData || motionHidden() || !online() || (ui.leagueLoading&&!force)) return;
   if(!force && ui.league && Date.now()-ui.leagueFetchedAt<60000) return;
   const id=ui.selected, serial=++ui.leagueRequest;
   ui.leagueLoading=true;
@@ -803,10 +817,10 @@ async function loadLeague({force=false,quiet=true}={}) {
     }
   } catch(e) {
     if(!quiet) showToast(e.message);
-  } finally {ui.leagueLoading=false;}
+  } finally {if(serial===ui.leagueRequest)ui.leagueLoading=false;}
 }
 async function loadSeason({force=false,quiet=true}={}) {
-  if(!ui.selected || !TG?.initData || document.hidden || (ui.seasonLoading&&!force)) return;
+  if(!ui.selected || !TG?.initData || motionHidden() || !online() || (ui.seasonLoading&&!force)) return;
   if(!force && ui.season && Date.now()-ui.seasonFetchedAt<60000) return;
   const id=ui.selected,serial=++ui.seasonRequest;
   ui.seasonLoading=true;
@@ -818,10 +832,10 @@ async function loadSeason({force=false,quiet=true}={}) {
     }
   } catch(e) {
     if(!quiet) showToast(e.message);
-  } finally {ui.seasonLoading=false;}
+  } finally {if(serial===ui.seasonRequest)ui.seasonLoading=false;}
 }
 async function loadStudio({force=false,quiet=true}={}) {
-  if(!ui.selected || !TG?.initData || document.hidden || (ui.studioLoading&&!force)) return;
+  if(!ui.selected || !TG?.initData || motionHidden() || !online() || (ui.studioLoading&&!force)) return;
   if(!force && ui.studio && Date.now()-ui.studioFetchedAt<60000) return;
   const id=ui.selected,serial=++ui.studioRequest;
   ui.studioLoading=true;
@@ -833,7 +847,7 @@ async function loadStudio({force=false,quiet=true}={}) {
     }
   } catch(e) {
     if(!quiet) showToast(e.message);
-  } finally {ui.studioLoading=false;}
+  } finally {if(serial===ui.studioRequest)ui.studioLoading=false;}
 }
 function syncBackButton() {
   try {
@@ -847,10 +861,16 @@ function displayRoute(tab) {
   render();
   syncBackButton();
   window.scrollTo(0,0);
-  if(tab==="market") loadMarket();
-  if(tab==="league") loadLeague();
-  if(tab==="season") loadSeason({quiet:false});
-  if(tab==="studio") loadStudio({quiet:false});
+  loadVisibleFeature();
+  wakeScheduler();
+}
+function loadVisibleFeature(){
+  const tab=ui.tab;
+  if(motionHidden()||!online())return;
+  if(tab==="market")loadMarket();
+  if(tab==="league")loadLeague();
+  if(tab==="season")loadSeason({quiet:false});
+  if(tab==="studio")loadStudio({quiet:false});
   if(tab==="farm"||tab==="fishing")refreshCountryside();
   if(tab==="arcade"){syncArcade();refreshArcade();}
 }
@@ -919,6 +939,8 @@ function syncTimers() {
   }
 }
 function confirmDialog(title, info, handler) {
+  if(ui.busy)return;
+  const petId=ui.selected, route=ui.tab;
   modal.innerHTML='<div class="modal"><h3>'+safe(title)+'</h3><p>'+safe(info)+'</p>'+
     '<div class="modal-buttons"><button class="btn btn-quiet" id="cancel">Отмена</button>'+
     '<button class="btn btn-cyan" id="confirm">Подтвердить</button></div></div>';
@@ -926,7 +948,9 @@ function confirmDialog(title, info, handler) {
   syncBackButton();
   modal.querySelector("#cancel").addEventListener("click", closeModal);
   modal.querySelector("#confirm").addEventListener("click", async ()=>{
-    closeModal(); await handler();
+    closeModal();
+    if(ui.busy||ui.selected!==petId||ui.tab!==route)return;
+    await handler();
   });
 }
 function syncTycoon(message="", accepted=false) {
@@ -965,7 +989,7 @@ function syncTycoon(message="", accepted=false) {
   }
 }
 async function performTycoonTap(code, jobId) {
-  if(ui.busy||motionHidden()||ui.tab!=="business")return;
+  if(ui.busy||motionHidden()||!online()||ui.tab!=="business")return;
   const id=ui.selected, unit=ui.pet?.businesses?.units?.[code], job=unit?.job;
   if(!job||job.id!==jobId||!window.PetsBusiness.workState(job,ui.config.tycoon_rules||{},serverNow()).canTap)return;
   ui.busy=true;
@@ -1078,7 +1102,7 @@ function syncArcade(){
   }
 }
 async function performArcade(action,game="",move=null){
-  if(ui.busy||motionHidden()||ui.tab!=="arcade"||!ui.pet?.arcade)return;
+  if(ui.busy||motionHidden()||!online()||ui.tab!=="arcade"||!ui.pet?.arcade)return;
   const id=ui.selected,state=ui.pet.arcade,run=state.active;
   const payload={pet_id:id,action,game};
   if(action==="start"){
@@ -1115,8 +1139,9 @@ async function performArcade(action,game="",move=null){
 }
 
 async function perform(kind, code="", extra={}) {
-  if (ui.busy) return;
+  if (ui.busy||motionHidden()||!online()) return;
   const id = ui.selected;
+  let refresh=false;
   ui.busy = true;
   // Invalidate a pending background GET before making changes.
   ++ui.syncSerial;
@@ -1145,15 +1170,19 @@ async function perform(kind, code="", extra={}) {
     showToast(result.message);
     if (result.message.startsWith("✅") || result.message.startsWith("💕")) haptic("success");
   } catch(e) {
+    refresh=true;
     haptic("error");
     showToast(e.message);
   } finally {
     ui.busy = false;
     app.classList.remove("is-busy");
+    wakeScheduler();
+    if(refresh)await refreshPet({force:true});
   }
 }
 document.addEventListener("click", async e=>{
-  const target=e.target.closest("button");if(!target) return;
+  const target=e.target.closest("button");if(!target||target.disabled) return;
+  if(ui.busy)return;
   if (target.dataset.root) {tap();goToTab(target.dataset.root,true);return;}
   if (target.dataset.tab) {tap();goToTab(target.dataset.tab);return;}
   if (target.dataset.mapLocation) {selectWorldLocation(target.dataset.mapLocation);return;}
@@ -1520,51 +1549,64 @@ async function boot() {
     document.querySelector("#retry")?.addEventListener("click", boot);
   }
 }
-// Refresh shared pet state when returning from another Telegram tab / chat.
-try {
-  TG?.onEvent?.("activated", () => {inactive=false;syncMotion();refreshPet({force:true});});
-  TG?.onEvent?.("deactivated", () => {inactive=true;syncMotion();});
-} catch {}
-function syncMotion() {
-  document.documentElement.classList.toggle("motion-paused",motionHidden());
-  if(motionHidden()){
-    clearPetReaction();
-    clearTimeout(effectTimer);
-    effects?.replaceChildren();
-  }
+// One scheduler: local countdowns only on the visible route, no hidden polling.
+let nextFull=0,nextFeature=0,nextSlow=0,lastFeature="";
+function runtimeCadence(){
+  const now=serverNow(),run=ui.pet?.arcade?.active,cast=ui.pet?.countryside?.cast;
+  const active=ui.tab==="arcade"?Boolean(run&&now<=run.expires_at):Boolean(cast&&now<=cast.expires_at);
+  return runtime.cadence(ui.tab,active,Boolean(run?.mine),online());
 }
-syncMotion();
-document.addEventListener("visibilitychange", () => {
-  syncMotion();
-  if(!document.hidden) {
-    refreshPet();
-    if(ui.tab==="market") loadMarket({force:true});
-    if(ui.tab==="league") loadLeague({force:true});
-    if(ui.tab==="season") loadSeason({force:true});
-    if(ui.tab==="studio") loadStudio({force:true});
-  }
-});
-window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
-window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
-// Fast lightweight updates only while the arcade is visible and running.
-setInterval(()=>{
-  if(!motionHidden()&&!ui.busy&&ui.tab==="arcade"&&ui.pet?.arcade?.active)syncArcade();
-},100);
-// Cheap countdown updates, only on the visible game screen.
-setInterval(()=>{
-  if(motionHidden()||ui.busy)return;
+function tick(){
+  if(motionHidden()) return;
+  if(!ui.pet||ui.busy)return;
+  const now=Date.now(),cadence=runtimeCadence(),feature=ui.selected+":"+ui.tab;
   if(ui.tab==="business")syncTycoon();
   if(ui.tab==="world")syncWorldMap();
   if(ui.tab==="farm"||ui.tab==="fishing")syncCountryside();
-},1000);
-// A short state-only poll lets the partner see a cast before its bite window closes.
-setInterval(()=>{
-  if(ui.tab==="fishing")refreshCountryside();
-  if(ui.tab==="arcade"&&(!ui.pet?.arcade?.active?.mine||serverNow()>ui.pet.arcade.active.expires_at))refreshArcade();
-},4000);
-setInterval(() => {
-  if(motionHidden()) return;
-  syncTimers();
-  refreshPet();
-}, 15000);
+  if(ui.tab==="arcade"&&ui.pet.arcade?.active)syncArcade();
+  if(now>=nextSlow){
+    nextSlow=now+15000;
+    syncTimers();
+  }
+  if(!online())return;
+  if(lastFeature!==feature){lastFeature=feature;nextFeature=now+(cadence.feature||15000);}
+  if(now>=nextFull){
+    nextFull=now+15000;
+    refreshPet();
+  }
+  if(cadence.feature!==null&&now>=nextFeature){
+    nextFeature=now+cadence.feature;
+    if(ui.tab==="arcade")refreshArcade();
+    else refreshCountryside();
+  }
+}
+const scheduler=runtime.createScheduler({
+  run:tick,delay:()=>runtimeCadence().tick,
+  active:()=>!motionHidden()&&Boolean(ui.pet),
+  schedule:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id)
+});
+function wakeScheduler(){scheduler.wake();}
+function syncMotion(){
+  document.documentElement.classList.toggle("motion-paused",motionHidden());
+  if(motionHidden()){
+    scheduler.stop();
+    clearPetReaction();clearTimeout(effectTimer);effects?.replaceChildren();
+  }else wakeScheduler();
+}
+function resume(){
+  syncMotion();
+  if(motionHidden())return;
+  refreshPet({force:true});
+  loadVisibleFeature();
+}
+try{
+  TG?.onEvent?.("activated",()=>{inactive=false;resume();});
+  TG?.onEvent?.("deactivated",()=>{inactive=true;syncMotion();});
+}catch{}
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden)syncMotion();else resume();
+});
+window.addEventListener("online",()=>{resume();});
+window.addEventListener("offline",()=>{showToast("Нет подключения к интернету");wakeScheduler();});
+syncMotion();
 boot();
