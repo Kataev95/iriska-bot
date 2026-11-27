@@ -30,6 +30,7 @@ from pet_market import (MAX_ACTIVE_LISTINGS_PER_PET, MAX_LISTINGS_PER_PET_DAY,
                         MAX_UNIT_PRICE, LISTING_TTL_SECONDS)
 from pets import species_by_code
 from pet_countryside import countryside_config
+from pet_arcade import arcade_config
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent
@@ -189,6 +190,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "materials": materials, "crafts": crafts,
         "businesses": businesses,
         "countryside": await db.countryside_state(pet_id, day),
+        "arcade": await db.arcade_state(pet_id, user_id, now, cfg.tz),
         "house_rooms": rooms if pet["house"] else {code: 0 for code in ROOMS},
         "house_used": room_used if pet["house"] else [],
         "house_route_loot": {
@@ -301,6 +303,7 @@ async def bootstrap(request: web.Request):
             "order_quantity": TYCOON_ORDER_QUANTITY,
         },
         "countryside": countryside_config(),
+        "arcade": arcade_config(),
         "market_rules": {
             "active_max": MAX_ACTIVE_LISTINGS_PER_PET,
             "posts_per_day": MAX_LISTINGS_PER_PET_DAY,
@@ -327,6 +330,36 @@ async def get_countryside(request: web.Request):
     now = time.time()
     state = await db.countryside_state(pet_id, datetime.fromtimestamp(now, cfg.tz).date().isoformat())
     return web.json_response({"countryside": state, "server_time": time.time()})
+
+
+async def get_arcade(request: web.Request):
+    uid = current_user(request)["user_id"]
+    pet_id = int(request.match_info["pet_id"])
+    db, cfg = request.app["db"], request.app["config"]
+    state = await db.arcade_state(pet_id, uid, time.time(), cfg.tz)
+    if state is None:
+        raise web.HTTPForbidden(text="Это не твой питомец")
+    return web.json_response({"arcade":state,"server_time":time.time()})
+
+
+async def arcade_action(request: web.Request):
+    uid = current_user(request)["user_id"]
+    if (request.content_length or 0)>1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=1024,actual_size=request.content_length)
+    payload = await request.json()
+    if not isinstance(payload,dict) or type(payload.get("pet_id")) is not int:
+        raise ValueError("Invalid arcade payload")
+    action,game=payload.get("action"),payload.get("game","")
+    if not isinstance(action,str) or not isinstance(game,str):
+        raise ValueError("Invalid arcade action")
+    db,cfg=request.app["db"],request.app["config"]
+    result=await db.arcade_action(payload["pet_id"],uid,action,game,payload,time.time(),cfg.tz)
+    if result is None:
+        raise web.HTTPForbidden(text="Это не твой питомец")
+    # Full snapshot only after a completed game (XP, level, records).
+    if result["message"].startswith("✅ Результат:"):
+        result["pet"]=await snapshot(db,cfg,uid,payload["pet_id"])
+    return web.json_response({**result,"server_time":time.time()})
 
 
 async def get_league(request: web.Request):
@@ -531,6 +564,8 @@ def create_app(db, config) -> web.Application:
     app.router.add_get("/api/bootstrap", bootstrap)
     app.router.add_get(r"/api/pet/{pet_id:\d+}", get_pet)
     app.router.add_get(r"/api/countryside/{pet_id:\d+}", get_countryside)
+    app.router.add_get(r"/api/arcade/{pet_id:\d+}", get_arcade)
+    app.router.add_post("/api/arcade/action", arcade_action)
     app.router.add_get(r"/api/market/{pet_id:\d+}", get_market)
     app.router.add_get(r"/api/league/{pet_id:\d+}", get_league)
     app.router.add_get(r"/api/season/{pet_id:\d+}", get_season)
