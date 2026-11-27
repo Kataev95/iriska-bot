@@ -172,3 +172,9 @@ body{background:#101d20;font-family:system-ui,-apple-system,"Segoe UI",sans-seri
   .pet-scene.pet-waving img{transform:none}
   .btn,.hub-card,.nav-btn{transition:none!important}
 }
+
+/* Native progress elements also work under the strict server CSP. */
+.profession-row{margin-top:14px}
+.game-progress.task-progress,.game-progress.house-progress{height:9px}
+.game-progress.league-badge-progress{height:6px;margin-top:8px}
+.game-progress.business-progress{margin-top:12px}
