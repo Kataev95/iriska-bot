@@ -8,7 +8,8 @@ from datetime import datetime
 
 from pet_business import (
     BUSINESSES, DAILY_PRODUCTION_STARTS, DAILY_SALE_COIN_LIMIT,
-    MAX_BUSINESS_LEVEL,
+    MAX_BUSINESS_LEVEL, TYCOON_MAX_TAPS, TYCOON_TAP_COOLDOWN,
+    TYCOON_TAP_SECONDS, TYCOON_WORKER_COSTS, TYCOON_ORDER_QUANTITY, production_duration,
 )
 from pet_inventory import MATERIALS
 from pet_market_db import PetMarketDatabase
@@ -65,6 +66,25 @@ class PetBusinessDatabase(PetMarketDatabase):
                 coins INTEGER NOT NULL CHECK(coins > 0),
                 created_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS pet_tycoon_workers (
+                pet_id INTEGER NOT NULL,
+                business TEXT NOT NULL,
+                level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 2),
+                PRIMARY KEY(pet_id,business)
+            );
+            CREATE TABLE IF NOT EXISTS pet_tycoon_orders (
+                pet_id INTEGER NOT NULL,
+                business TEXT NOT NULL,
+                day TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                sale_id INTEGER NOT NULL UNIQUE,
+                PRIMARY KEY(pet_id,business,day)
+            );
+            CREATE TABLE IF NOT EXISTS pet_tycoon_work (
+                job_id INTEGER PRIMARY KEY,
+                taps INTEGER NOT NULL CHECK(taps BETWEEN 1 AND 30),
+                last_tap_at REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_pet_business_sales_daily
                 ON pet_business_sales(pet_id,day);
         """)
@@ -87,8 +107,10 @@ class PetBusinessDatabase(PetMarketDatabase):
         ).fetchall()
         jobs = await (
             await db.execute(
-                "SELECT id,business,finish_at,output_qty FROM pet_business_jobs "
-                "WHERE pet_id=? AND collected_at IS NULL",
+                "SELECT j.id,j.business,j.finish_at,j.output_qty, "
+                "COALESCE(w.taps,0) AS taps,COALESCE(w.last_tap_at,0) AS last_tap_at "
+                "FROM pet_business_jobs j LEFT JOIN pet_tycoon_work w ON w.job_id=j.id "
+                "WHERE j.pet_id=? AND j.collected_at IS NULL",
                 (pet_id,),
             )
         ).fetchall()
@@ -105,6 +127,14 @@ class PetBusinessDatabase(PetMarketDatabase):
                 (pet_id, day),
             )
         ).fetchone()
+        workers = await (await db.execute(
+            "SELECT business,level FROM pet_tycoon_workers WHERE pet_id=?", (pet_id,)
+        )).fetchall()
+        worker_by = {r["business"]: int(r["level"]) for r in workers}
+        orders = await (await db.execute(
+            "SELECT business FROM pet_tycoon_orders WHERE pet_id=? AND day=?", (pet_id, day)
+        )).fetchall()
+        completed_orders = {row["business"] for row in orders}
         level_by = {r["business"]: int(r["level"]) for r in levels}
         stock_by = {r["business"]: int(r["quantity"]) for r in stocks}
         job_by = {r["business"]: r for r in jobs}
@@ -114,17 +144,102 @@ class PetBusinessDatabase(PetMarketDatabase):
             state[code] = {
                 "level": level_by.get(code, 0),
                 "stock": stock_by.get(code, 0),
-                "job": {
-                    "id": int(active["id"]),
-                    "finish_at": float(active["finish_at"]),
-                    "quantity": int(active["output_qty"]),
-                } if active else None,
+                "workers": worker_by.get(code, 0),
+                "order_done": code in completed_orders,
+                "job": self._tycoon_job(active) if active else None,
             }
         return {
             "units": state,
             "starts_remaining": max(0, DAILY_PRODUCTION_STARTS - int(started[0])),
             "sales_coins_remaining": max(0, DAILY_SALE_COIN_LIMIT - int(sales[0])),
         }
+
+    @staticmethod
+    def _tycoon_job(row):
+        return {
+            "id": int(row["id"]), "finish_at": float(row["finish_at"]),
+            "quantity": int(row["output_qty"]), "taps": int(row["taps"]),
+            "tap_ready_at": float(row["last_tap_at"]) + TYCOON_TAP_COOLDOWN,
+        }
+
+    async def hire_tycoon_worker(self, pet_id, user_id, code, expected_level):
+        if code not in BUSINESSES or type(expected_level) is not int:
+            return "Неверные данные работника"
+        async with self._game_transaction() as db:
+            pet = await self._game_pet(db, pet_id, user_id)
+            if pet is None or not int(pet["best_streak"]):
+                return "Питомец недоступен"
+            unit = await (await db.execute(
+                "SELECT level FROM pet_business_units WHERE pet_id=? AND business=?",
+                (pet_id, code),
+            )).fetchone()
+            if unit is None:
+                return "Сначала постройте предприятие"
+            row = await (await db.execute(
+                "SELECT level FROM pet_tycoon_workers WHERE pet_id=? AND business=?",
+                (pet_id, code),
+            )).fetchone()
+            level = int(row["level"]) if row else 0
+            if expected_level != level:
+                return "Работники изменились. Обновите экран"
+            if level >= 2:
+                return "Команда уже полностью улучшена"
+            if level >= int(unit["level"]):
+                return "Сначала улучшите оборудование"
+            refusal = await self._business_deduct(db, pet_id, TYCOON_WORKER_COSTS[code][level])
+            if refusal:
+                return refusal
+            await db.execute(
+                "INSERT INTO pet_tycoon_workers(pet_id,business,level) VALUES(?,?,?) "
+                "ON CONFLICT(pet_id,business) DO UPDATE SET level=excluded.level",
+                (pet_id, code, level+1),
+            )
+            return "✅ Работник нанят! Новые партии будут производиться быстрее."
+
+    async def tap_tycoon_job(self, pet_id, user_id, code, job_id, expected_taps, now):
+        """One server-timed tap on an already paid batch; no direct goods or coins."""
+        def response(message, job=None, accepted=False):
+            return {"message": message, "job": job, "accepted": accepted}
+        if (code not in BUSINESSES or type(job_id) is not int or job_id <= 0
+                or type(expected_taps) is not int or not 0 <= expected_taps <= TYCOON_MAX_TAPS):
+            return response("Неверные данные нажатия")
+        async with self._game_transaction() as db:
+            pet = await self._game_pet(db, pet_id, user_id)
+            if pet is None or not int(pet["best_streak"]):
+                return response("Питомец недоступен")
+            row = await (await db.execute(
+                "SELECT j.id,j.finish_at,j.output_qty,u.level,"
+                "COALESCE(w.taps,0) AS taps,COALESCE(w.last_tap_at,0) AS last_tap_at "
+                "FROM pet_business_jobs j JOIN pet_business_units u "
+                "ON u.pet_id=j.pet_id AND u.business=j.business "
+                "LEFT JOIN pet_tycoon_work w ON w.job_id=j.id "
+                "WHERE j.pet_id=? AND j.business=? AND j.collected_at IS NULL",
+                (pet_id, code),
+            )).fetchone()
+            if row is None:
+                return response("Партия уже забрана или не найдена")
+            job = self._tycoon_job(row)
+            if job["id"] != job_id or job["taps"] != expected_taps:
+                return response("Партия обновлена", job)
+            if now >= job["finish_at"]:
+                return response("Партия уже готова", job)
+            if job["taps"] >= TYCOON_MAX_TAPS:
+                return response("Лимит ручной работы исчерпан", job)
+            if now < job["tap_ready_at"]:
+                return response("Подождите немного", job)
+            finish = max(now, job["finish_at"] - TYCOON_TAP_SECONDS[int(row["level"])-1])
+            await db.execute(
+                "UPDATE pet_business_jobs SET finish_at=? WHERE id=?",
+                (finish, job_id),
+            )
+            await db.execute(
+                "INSERT INTO pet_tycoon_work(job_id,taps,last_tap_at) VALUES(?,?,?) "
+                "ON CONFLICT(job_id) DO UPDATE SET taps=excluded.taps,last_tap_at=excluded.last_tap_at",
+                (job_id, expected_taps+1, now),
+            )
+            job.update(finish_at=finish, taps=expected_taps+1,
+                       tap_ready_at=now+TYCOON_TAP_COOLDOWN)
+            return response("✅ Партия готова!" if finish <= now else "✅ Работа выполнена", job, True)
 
     async def _business_deduct(self, db, pet_id, costs):
         """Check every cost before writing, with an atomic balance update."""
@@ -233,16 +348,21 @@ class PetBusinessDatabase(PetMarketDatabase):
             if refusal:
                 return refusal
             quantity = definition.outputs[int(unit["level"])-1]
+            workers = await (await db.execute(
+                "SELECT level FROM pet_tycoon_workers WHERE pet_id=? AND business=?",
+                (pet_id, code),
+            )).fetchone()
+            seconds = production_duration(code, int(workers["level"]) if workers else 0)
             await db.execute(
                 "INSERT INTO pet_business_jobs("
                 "pet_id,business,user_id,day,started_at,finish_at,output_qty) "
                 "VALUES(?,?,?,?,?,?,?)",
                 (pet_id, code, user_id, day, now,
-                 now + definition.production_seconds, quantity),
+                 now + seconds, quantity),
             )
             return (
                 f"✅ {definition.icon} Производство запущено! "
-                f"Готово через {definition.production_seconds//60} минут."
+                f"Готово через {(seconds+59)//60} минут."
             )
 
     async def collect_business_job(self, pet_id, user_id, code, job_id, now):
@@ -282,7 +402,7 @@ class PetBusinessDatabase(PetMarketDatabase):
                 f"+{row['output_qty']} {definition.good_title.lower()}."
             )
 
-    async def sell_business_goods(self, pet_id, user_id, code, now, tz):
+    async def sell_business_goods(self, pet_id, user_id, code, now, tz, *, order=False, expected_stock=None):
         definition = BUSINESSES.get(code)
         if definition is None:
             return "Неизвестное предприятие"
@@ -299,7 +419,16 @@ class PetBusinessDatabase(PetMarketDatabase):
             ).fetchone()
             if stock is None or int(stock["quantity"]) <= 0:
                 return "Нет готовых товаров для продажи"
+            if order and (type(expected_stock) is not int or expected_stock != int(stock["quantity"])):
+                return "Склад изменился. Обновите заказ"
             day = datetime.fromtimestamp(now, tz).date().isoformat()
+            if order:
+                done = await (await db.execute(
+                    "SELECT 1 FROM pet_tycoon_orders WHERE pet_id=? AND business=? AND day=?",
+                    (pet_id, code, day),
+                )).fetchone()
+                if done:
+                    return "Сегодняшний заказ уже выполнен"
             earned = await (
                 await db.execute(
                     "SELECT COALESCE(SUM(coins),0) FROM pet_business_sales "
@@ -311,6 +440,10 @@ class PetBusinessDatabase(PetMarketDatabase):
             quantity = min(int(stock["quantity"]), remaining//definition.sell_price)
             if quantity <= 0:
                 return "Дневной лимит продаж исчерпан. Попробуйте завтра"
+            if order:
+                if quantity < TYCOON_ORDER_QUANTITY:
+                    return "Для заказа нужно 2 товара и достаточный лимит продаж"
+                quantity = TYCOON_ORDER_QUANTITY
             coins = quantity*definition.sell_price
             changed = await db.execute(
                 "UPDATE pet_business_goods SET quantity=quantity-? "
@@ -334,13 +467,19 @@ class PetBusinessDatabase(PetMarketDatabase):
                 (pet["chat_id"], user_id, coins,
                  f"питомец #{pet_id}, бизнес {code}: {quantity} шт."),
             )
-            await db.execute(
+            sale = await db.execute(
                 "INSERT INTO pet_business_sales("
                 "pet_id,business,user_id,day,quantity,coins,created_at) "
                 "VALUES(?,?,?,?,?,?,?)",
                 (pet_id, code, user_id, day, quantity, coins, now),
             )
+            if order:
+                await db.execute(
+                    "INSERT INTO pet_tycoon_orders(pet_id,business,day,user_id,sale_id) VALUES(?,?,?,?,?)",
+                    (pet_id, code, day, user_id, sale.lastrowid),
+                )
             return (
-                f"✅ Продано {definition.good_icon} {quantity} шт. "
+                ("✅ Заказ выполнен! " if order else "✅ Продано ")
+                + f"{definition.good_icon} {quantity} шт. "
                 f"🍬 +{coins} ирисок продавцу. Лимит: {remaining-coins} 🍬 сегодня."
             )

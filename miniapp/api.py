@@ -20,7 +20,11 @@ from pet_game import (DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS,
                       growth_days, level_for, next_level_xp, xp_for_level)
 from pet_inventory import MATERIALS, RECIPES, loot_for
 from pet_home import ROOMS, room_effect, route_loot
-from pet_business import BUSINESSES, DAILY_PRODUCTION_STARTS, DAILY_SALE_COIN_LIMIT
+from pet_business import (
+    BUSINESSES, DAILY_PRODUCTION_STARTS, DAILY_SALE_COIN_LIMIT,
+    TYCOON_TAP_COOLDOWN, TYCOON_MAX_TAPS, TYCOON_TAP_SECONDS,
+    TYCOON_WORKER_COSTS, TYCOON_WORKER_PERCENT, TYCOON_ORDER_QUANTITY,
+)
 from pet_market import (MAX_ACTIVE_LISTINGS_PER_PET, MAX_LISTINGS_PER_PET_DAY,
                         MAX_BUYS_PER_PET_DAY, MAX_ITEM_QUANTITY,
                         MAX_UNIT_PRICE, LISTING_TTL_SECONDS)
@@ -268,6 +272,11 @@ async def bootstrap(request: web.Request):
              "sell_price": unit.sell_price,
              "production_seconds": unit.production_seconds,
              "outputs": list(unit.outputs),
+             "worker_tiers": [
+                 {"level": level+1, "duration_percent": TYCOON_WORKER_PERCENT[level+1],
+                  "costs": [{"code": mat, "quantity": qty} for mat, qty in requirements]}
+                 for level, requirements in enumerate(TYCOON_WORKER_COSTS[code])
+             ],
              "inputs": [{"code": mat, "quantity": quantity}
                         for mat, quantity in unit.input_materials],
              "tiers": [
@@ -281,6 +290,13 @@ async def bootstrap(request: web.Request):
         "business_limits": {
             "production_starts": DAILY_PRODUCTION_STARTS,
             "sales_coins": DAILY_SALE_COIN_LIMIT,
+        },
+        "tycoon_rules": {
+            "tap_cooldown_ms": int(TYCOON_TAP_COOLDOWN * 1000),
+            "max_taps": TYCOON_MAX_TAPS,
+            "tap_seconds": list(TYCOON_TAP_SECONDS),
+            "worker_duration_percent": list(TYCOON_WORKER_PERCENT),
+            "order_quantity": TYCOON_ORDER_QUANTITY,
         },
         "market_rules": {
             "active_max": MAX_ACTIVE_LISTINGS_PER_PET,
@@ -399,8 +415,13 @@ async def action(request: web.Request):
         result = await db.collect_business_job(
             pet_id, uid, code, int(payload["job_id"]), now
         )
-    elif kind == "business_sell" and code in BUSINESSES:
-        result = await db.sell_business_goods(pet_id, uid, code, now, cfg.tz)
+    elif kind == "tycoon_hire" and code in BUSINESSES:
+        result = await db.hire_tycoon_worker(pet_id, uid, code, payload["expected_level"])
+    elif kind in ("business_sell", "tycoon_order") and code in BUSINESSES:
+        result = await db.sell_business_goods(
+            pet_id, uid, code, now, cfg.tz, order=kind == "tycoon_order",
+            expected_stock=payload.get("expected_stock"),
+        )
     elif kind == "studio_equip":
         result = await db.equip_studio_style(
             pet_id, uid, str(payload.get("slot", "")), code, now
@@ -433,6 +454,23 @@ async def action(request: web.Request):
         "message": result,
         "pet": await snapshot(db, cfg, uid, pet_id),
     })
+
+
+async def tycoon_tap(request: web.Request):
+    uid = current_user(request)["user_id"]
+    if (request.content_length or 0) > 1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=1024, actual_size=request.content_length)
+    payload = await request.json()
+    if not isinstance(payload, dict) or type(payload.get("pet_id")) is not int:
+        raise ValueError("Payload")
+    pet_id = payload["pet_id"]
+    db = request.app["db"]
+    await own_pet(db, uid, pet_id)
+    result = await db.tap_tycoon_job(
+        pet_id, uid, str(payload.get("code", "")), payload.get("job_id"),
+        payload.get("expected_taps"), time.time(),
+    )
+    return web.json_response({**result, "server_time": time.time()})
 
 
 async def index(request):
@@ -468,6 +506,7 @@ def create_app(db, config) -> web.Application:
     app.router.add_get(r"/api/season/{pet_id:\d+}", get_season)
     app.router.add_get(r"/api/studio/{pet_id:\d+}", get_studio)
     app.router.add_post("/api/action", action)
+    app.router.add_post("/api/tycoon/tap", tycoon_tap)
     app.router.add_get("/assets/pets/{filename}", pet_image)
     app.router.add_static("/static/", ROOT / "static")
     return app

@@ -25,7 +25,7 @@ for (const event of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenCha
 syncSafeArea();
 
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
-             group: "food", busy: false, syncing: false, lastSync: 0,
+             group: "food", businessCode: "florist", busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
              studioMode:"frames",
              studio:null, studioLoading:false, studioFetchedAt:0, studioRequest:0,
@@ -224,6 +224,9 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect("🏪 Предприятие улучшено!", "level");
     return;
   }
+  if (kind==="tycoon_hire" && (after.businesses?.units?.[code]?.workers||0)>(before.businesses?.units?.[code]?.workers||0)) {
+    playEffect("🧑‍🔧 Новый работник!", "level");return;
+  }
   if (kind==="business_start" && !before.businesses?.units?.[code]?.job &&
       after.businesses?.units?.[code]?.job) {
     playEffect("⚙️ Производство запущено", "care");
@@ -234,7 +237,7 @@ function showActionEffect(kind, code, before, after, message) {
     playEffect("📦 Товары на складе!", "reward");
     return;
   }
-  if (kind==="business_sell" && after.balance>before.balance) {
+  if ((kind==="business_sell" || kind==="tycoon_order") && after.balance>before.balance) {
     playEffect("🍬 +"+(after.balance-before.balance)+" ирисок!", "reward");
     return;
   }
@@ -416,7 +419,7 @@ function world(p) {
 }
 function games(p) {
   return hub("🎮 Игры","Развивайтесь вместе и выполняйте задания",[
-    hubCard("business","🏪","Семейные предприятия","Производство, улучшения и продажа товаров"),
+    hubCard("business","🏪","PETS Tycoon","Ручная работа, команда, склад и заказы"),
     hubCard("tasks","📋","Задания дня",p.daily.filter(t=>t.claimed).length+" / "+p.daily.length+" наград получено")
   ]);
 }
@@ -629,7 +632,7 @@ function render() {
   app.innerHTML=tools+({
     profile,world,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
-    business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow()),
+    business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow(),ui.businessCode),
     market: p => window.PetsMarket.renderMarket(
       ui.market,p,ui.config,ui.marketSelection,serverNow()),
     league: p => window.PetsLeague.renderLeague(ui.league,p,serverNow()),
@@ -791,20 +794,7 @@ function syncTimers() {
     }
     loadMarket();
   }
-  if(ui.tab==="business") {
-    for(const label of app.querySelectorAll("[data-business-countdown]")) {
-      const code=label.dataset.businessCountdown;
-      const job=ui.pet.businesses?.units?.[code]?.job;
-      if(!job) continue;
-      const remaining=Math.max(0,job.finish_at-serverNow());
-      label.textContent=remaining>0?"⏳ Осталось "+duration(remaining):"✅ Товары готовы!";
-      const button=app.querySelector('[data-business-collect="'+code+'"]');
-      if(button) {
-        button.disabled=remaining>0;
-        button.textContent=remaining>0?"⏳ Производится":"📦 Забрать готовую партию";
-      }
-    }
-  }
+  if(ui.tab==="business") syncTycoon();
   if (ui.tab === "trips" && ui.pet.trip) {
     const remaining = Math.max(0, ui.pet.trip.finish_at - serverNow());
     const label = app.querySelector("[data-trip-countdown]");
@@ -846,6 +836,76 @@ function confirmDialog(title, info, handler) {
     closeModal(); await handler();
   });
 }
+function syncTycoon(message="", accepted=false) {
+  if(ui.tab!=="business"||motionHidden()||!ui.pet)return;
+  for(const machine of app.querySelectorAll("[data-tycoon-machine]")){
+    const code=machine.dataset.tycoonMachine;
+    const job=ui.pet.businesses?.units?.[code]?.job;
+    const button=machine.querySelector("[data-tycoon-tap]");
+    if(!job||!button||Number(button.dataset.jobId)!==job.id)continue;
+    const state=window.PetsBusiness.workState(job,ui.config.tycoon_rules||{},serverNow());
+    machine.classList.toggle("tycoon-ready",state.ready);
+    button.disabled=ui.busy||!state.canTap;
+    const caption=button.querySelector("b");
+    if(caption)caption.textContent=state.ready?"Партия готова":state.taps>=state.max?"Лимит работы":"РАБОТАТЬ";
+    const label=machine.querySelector("[data-business-countdown]");
+    if(label)label.textContent=state.ready?"Готово!":window.PetsBusiness.duration(state.left);
+    const meter=machine.querySelector("[data-tycoon-taps]");
+    if(meter)meter.textContent=state.taps+" / "+state.max;
+    const progress=machine.querySelector("[data-tycoon-progress]");
+    if(progress)progress.value=state.taps;
+    const collect=machine.querySelector("[data-business-collect]");
+    if(collect){
+      collect.disabled=ui.busy||!state.ready;
+      collect.textContent=state.ready?"📦 Забрать партию":"Производится…";
+    }
+    const status=machine.querySelector("[data-tycoon-status]");
+    if(status&&(message||state.ready)){
+      const text=message||(state.ready?"Можно забрать партию":"");
+      if(status.textContent!==text)status.textContent=text;
+    }
+    if(accepted){
+      machine.classList.remove("tycoon-hit");
+      machine.classList.add("tycoon-hit");
+      setTimeout(()=>machine.classList.remove("tycoon-hit"),300);
+    }
+  }
+}
+async function performTycoonTap(code, jobId) {
+  if(ui.busy||motionHidden()||ui.tab!=="business")return;
+  const id=ui.selected, unit=ui.pet?.businesses?.units?.[code], job=unit?.job;
+  if(!job||job.id!==jobId||!window.PetsBusiness.workState(job,ui.config.tycoon_rules||{},serverNow()).canTap)return;
+  ui.busy=true;
+  ++ui.syncSerial;
+  syncTycoon();
+  let refresh=false, message="", accepted=false;
+  try {
+    const result=await api("/api/tycoon/tap",{pet_id:id,code,job_id:job.id,expected_taps:job.taps||0});
+    if(ui.selected!==id)return;
+    syncClock(result);
+    if(result.job?.id===job.id){
+      unit.job=result.job;
+      message=result.message;
+      accepted=Boolean(result.accepted);
+      if(accepted)haptic("light");
+    } else {
+      refresh=true;
+      showToast(result.message);
+    }
+  } catch(e) {
+    refresh=true;
+    showToast(e.message);
+  } finally {
+    ui.busy=false;
+    syncTycoon(message,accepted);
+    if(refresh)await refreshPet({force:true,quiet:false});
+    else if(unit.job?.tap_ready_at){
+      const wait=Math.max(0,Math.ceil((unit.job.tap_ready_at-serverNow())*1000));
+      setTimeout(()=>syncTycoon(),Math.min(wait+30,2000));
+    }
+  }
+}
+
 async function perform(kind, code="", extra={}) {
   if (ui.busy) return;
   const id = ui.selected;
@@ -1007,6 +1067,43 @@ document.addEventListener("click", async e=>{
     }
     return;
   }
+  if (target.dataset.tycoonSelect) {
+    if(!ui.busy&&ui.config.businesses.some(b=>b.code===target.dataset.tycoonSelect)){
+      ui.businessCode=target.dataset.tycoonSelect;tap();render();
+    }
+    return;
+  }
+  if (target.dataset.tycoonTap) {
+    const job=Number(target.dataset.jobId);
+    if(Number.isSafeInteger(job)&&job>0)await performTycoonTap(target.dataset.tycoonTap,job);
+    return;
+  }
+  if (target.dataset.tycoonHire) {
+    const unit=ui.config.businesses.find(b=>b.code===target.dataset.tycoonHire);
+    if(unit){
+      const level=Number(ui.pet.businesses?.units?.[unit.code]?.workers||0);
+      const tier=unit.worker_tiers?.[level];
+      if(tier){
+        const cost=tier.costs.map(item=>{
+          const m=ui.config.materials.find(x=>x.code===item.code);
+          return (m?.icon||"📦")+" "+item.quantity;
+        }).join(", ");
+        confirmDialog("Нанять работника?","Общие материалы: "+cost+". Новые партии станут быстрее; текущая не изменится.",
+          ()=>perform("tycoon_hire",unit.code,{expected_level:level}));
+      }
+    }
+    return;
+  }
+  if (target.dataset.tycoonOrder) {
+    const unit=ui.config.businesses.find(b=>b.code===target.dataset.tycoonOrder);
+    if(unit){
+      const qty=ui.config.tycoon_rules?.order_quantity||2;
+      const expectedStock=Number(ui.pet.businesses?.units?.[unit.code]?.stock||0);
+      confirmDialog("Выполнить заказ?","С общего склада спишется "+qty+" шт. Ты получишь "+(qty*unit.sell_price)+" 🍬 в пределах дневного лимита.",
+        ()=>perform("tycoon_order",unit.code,{expected_stock:expectedStock}));
+    }
+    return;
+  }
   if (target.dataset.businessBuild) {
     const unit=ui.config.businesses.find(b=>b.code===target.dataset.businessBuild);
     if(unit) {
@@ -1033,7 +1130,7 @@ document.addEventListener("click", async e=>{
       }).join(", ");
       confirmDialog("Запустить производство?",
         "Ресурсы с общего склада: "+cost+". Товары можно забрать через "+
-        duration(unit.production_seconds)+".",
+        window.PetsBusiness.duration(window.PetsBusiness.workerDuration(unit,ui.pet.businesses?.units?.[unit.code]||{},ui.config.tycoon_rules||{}))+". Можно ускорить партию нажатиями.",
         ()=>perform("business_start",unit.code));
     }
     return;
@@ -1164,6 +1261,10 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
 window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
+// A cheap countdown update only on the visible Tycoon screen.
+setInterval(()=>{
+  if(!motionHidden()&&ui.tab==="business"&&!ui.busy)syncTycoon();
+},1000);
 setInterval(() => {
   if(motionHidden()) return;
   syncTimers();

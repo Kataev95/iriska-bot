@@ -400,6 +400,60 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"pet_id":1,"kind":"business_sell","code":"florist"})
         self.assertEqual(unauth.status,401)
 
+    async def test_tycoon_endpoint_is_authorized_and_server_timed(self):
+        await self.db._require().executemany(
+            "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
+            [(1,"wood",30),(1,"leaf",30),(1,"stone",10)],
+        )
+        await self.db._require().commit()
+        config=await (await self.client.get("/api/bootstrap",headers=self.headers)).json()
+        self.assertEqual(config["tycoon_rules"]["tap_seconds"],[60,90])
+        self.assertEqual(config["tycoon_rules"]["max_taps"],30)
+        for payload in (
+            {"kind":"business_build","code":"florist","expected_level":0},
+            {"kind":"tycoon_hire","code":"florist","expected_level":0},
+            {"kind":"business_start","code":"florist"},
+        ):
+            r=await self.client.post("/api/action",headers=self.headers,json={"pet_id":1,**payload})
+            data=await r.json()
+            self.assertTrue(data["message"].startswith("✅"),data)
+        job=data["pet"]["businesses"]["units"]["florist"]["job"]
+        self.assertEqual(data["pet"]["businesses"]["units"]["florist"]["workers"],1)
+        payload={"pet_id":1,"code":"florist","job_id":job["id"],"expected_taps":0,
+                 "seconds":100000,"quantity":10000,"coins":100000,"user_id":201}
+        self.assertEqual((await self.client.post("/api/tycoon/tap",json=payload)).status,401)
+        self.assertEqual((await self.client.post("/api/tycoon/tap",json=payload,
+            headers={"X-Telegram-Init-Data":signed(201)})).status,403)
+        forged=await self.client.post("/api/tycoon/tap",headers=self.headers,
+            json={**payload,"expected_taps":True})
+        self.assertFalse((await forged.json())["accepted"])
+        first=await (await self.client.post("/api/tycoon/tap",headers=self.headers,json=payload)).json()
+        self.assertTrue(first["accepted"])
+        self.assertEqual(first["job"]["finish_at"],job["finish_at"]-60)
+        self.assertEqual(first["job"]["taps"],1)
+        self.assertEqual(first["job"]["quantity"],2)
+        again=await (await self.client.post("/api/tycoon/tap",headers=self.headers,json=payload)).json()
+        self.assertFalse(again["accepted"])
+        self.assertEqual(again["job"],first["job"])
+        partner=await (await self.client.get("/api/pet/1",
+            headers={"X-Telegram-Init-Data":signed(102)})).json()
+        self.assertEqual(partner["businesses"]["units"]["florist"]["job"],first["job"])
+        self.assertEqual(partner["businesses"]["units"]["florist"]["stock"],0)
+        self.assertEqual((await self.db.get_user(CHAT_ID,101))["balance"],20)
+        await self.db._require().execute("UPDATE pet_business_jobs SET finish_at=? WHERE id=?",
+                                        (time.time()-1,job["id"]))
+        await self.db._require().commit()
+        r=await self.client.post("/api/action",headers=self.headers,
+            json={"kind":"business_collect","pet_id":1,"code":"florist","job_id":job["id"]})
+        self.assertEqual((await r.json())["pet"]["businesses"]["units"]["florist"]["stock"],2)
+        r=await self.client.post("/api/action",headers=self.headers,
+            json={"kind":"tycoon_order","pet_id":1,"code":"florist","expected_stock":2,"coins":999999})
+        data=await r.json()
+        self.assertEqual(data["pet"]["balance"],24)
+        self.assertEqual(data["pet"]["businesses"]["sales_coins_remaining"],8)
+        self.assertTrue(data["pet"]["businesses"]["units"]["florist"]["order_done"])
+        self.assertEqual(data["pet"]["businesses"]["units"]["florist"]["stock"],0)
+
     async def test_market_auth_escrow_and_balance_transfer(self):
         await self.db._require().execute(
             "INSERT INTO pet_materials(pet_id,material,quantity) VALUES(?,?,?)",
@@ -707,7 +761,7 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=2", html)
-        self.assertIn("/static/app.js?v=15", html)
+        self.assertIn("/static/app.js?v=16", html)
         self.assertIn("/static/pet-life.js?v=1", html)
         self.assertIn("/static/pet-life.css?v=1", html)
         self.assertIn("/static/world-ui.js?v=1", html)
@@ -721,8 +775,8 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/league.css?v=1", html)
         self.assertIn("/static/market.css?v=1", html)
         self.assertIn("/static/market.js?v=1", html)
-        self.assertIn("/static/business.css?v=1", html)
-        self.assertIn("/static/business.js?v=2", html)
+        self.assertIn("/static/business.css?v=2", html)
+        self.assertIn("/static/business.js?v=3", html)
 
 
 class MiniAppFeedbackTests(unittest.TestCase):
@@ -926,6 +980,53 @@ assert.equal(g.finish(b),false);
 const c=g.begin(2,300,1500);
 assert.equal(g.finish(c),true);
 assert.equal(g.begin(2,301,1500)>c,true);
+"""
+        cp = subprocess.run(["node", "-e", code, str(script)], capture_output=True,
+                            text=True, timeout=15, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+
+    def test_tycoon_frontend_countdown_and_worker_rules(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        js = (static / "app.js").read_text(encoding="utf-8")
+        business = (static / "business.js").read_text(encoding="utf-8")
+        self.assertIn('api("/api/tycoon/tap"', js)
+        self.assertIn("expected_taps:job.taps||0", js)
+        self.assertIn("expected_stock:expectedStock", js)
+        self.assertIn('data-tycoon-hire=', business)
+        self.assertIn('data-tycoon-order=', business)
+        self.assertIn('data-tycoon-tap=', business)
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script = static / "business.js"
+        code = """
+const assert=require("node:assert/strict");
+global.window={};
+require(process.argv[1]);
+const t=window.PetsBusiness, rules={max_taps:30,tap_seconds:[60,90],worker_duration_percent:[100,75,50]};
+const job={id:1,taps:2,finish_at:100,tap_ready_at:50};
+assert.equal(t.workState(job,rules,49).canTap,false);
+assert.equal(t.workState(job,rules,50).canTap,true);
+assert.equal(t.workState(job,rules,100).ready,true);
+assert.equal(t.workState({...job,taps:30},rules,50).canTap,false);
+assert.equal(t.workerDuration({production_seconds:900},{workers:2},rules),450);
+assert.equal(t.duration(75),"1 мин 15 с");
+const unit={code:"florist",name:"Лавка",icon:"💐",good_icon:"💐",good_title:"Букет",description:"Тест",sell_price:2,production_seconds:900,outputs:[2,3],inputs:[],tiers:[{costs:[]},{costs:[]}],worker_tiers:[{duration_percent:75,costs:[]}]};
+const p={best_streak:2,businesses:{starts_remaining:3,sales_coins_remaining:12,units:{florist:{level:1,workers:0,stock:2,job}}}};
+const c={businesses:[unit],materials:[],tycoon_rules:rules};
+let html=t.renderBusiness(p,c,60,"florist");
+assert.match(html,/data-tycoon-tap="florist"/);
+assert.match(html,/data-tycoon-hire="florist"/);
+assert.match(html,/data-tycoon-order="florist"/);
+assert.match(html,/data-business-collect="florist"[^>]*disabled/);
+html=t.renderBusiness(p,c,101,"florist");
+assert.match(html,/data-tycoon-tap="florist"[^>]*disabled/);
+assert.match(html,/Забрать партию/);
+p.businesses.units.florist.order_done=true;
+html=t.renderBusiness(p,c,101,"florist");
+assert.match(html,/data-tycoon-order="florist"[^>]*disabled[^>]*>✓ Выполнен/);
 """
         cp = subprocess.run(["node", "-e", code, str(script)], capture_output=True,
                             text=True, timeout=15, check=False)
