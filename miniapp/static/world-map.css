@@ -1,0 +1,47 @@
+/* Stage 5 — responsive, original illustrated valley with native controls. */
+.map-heading{display:flex;align-items:center;justify-content:space-between;margin:12px 0;gap:12px}
+.map-heading h1{font-size:27px;line-height:1.1;margin:4px 0;color:#f8efd5;letter-spacing:-.04em}
+.map-heading p{font-size:12px;color:#c5d5c1;margin:6px 0 0}
+.map-heading-compass{border:1px solid #718c69;border-radius:50%;width:43px;height:43px;display:grid;place-items:center;color:#ffdda0;font-size:26px;background:#304b3b;flex-shrink:0}
+.world-map{position:relative;isolation:isolate;overflow:hidden;border:1px solid #9aaf83;border-radius:24px;min-height:400px;aspect-ratio:4/5;background:#88b680;box-shadow:0 6px 0 #173628,0 14px 28px #06191050}
+.map-land{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+.world-map::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;background:transparent}
+.map-phase-morning::after{background:#ffdf8a18}
+.map-phase-evening::after{background:#a65a7c29}
+.map-phase-night::after{background:#20365a66}
+.map-night-stars{opacity:0}
+.map-phase-night .map-night-stars,.map-phase-evening .map-night-stars{opacity:.9}
+.map-ripples{animation:map-ripples 5s ease-in-out infinite alternate}
+@keyframes map-ripples{from{opacity:.35}to{opacity:.85}}
+.map-grid{position:absolute;inset:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));align-items:center;justify-items:center;z-index:2;padding:0 4px}
+.map-place{appearance:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;width:min(100%,108px);min-height:96px;padding:4px 2px 6px;background:transparent;border:2px solid transparent;border-radius:16px;color:#f9f2d9;touch-action:manipulation;position:relative}
+.map-place-icon{display:grid;place-items:center;width:57px;height:57px;background:linear-gradient(150deg,#f6ecc4,#c5d9a1);border:2px solid #f8f2d2;border-radius:19px;font-size:34px;line-height:1;box-shadow:0 4px 0 #507a57,0 7px 12px #203c3240;transition:transform .15s ease}
+.map-place-title{display:block;background:#214237;color:#f8f6df;border-radius:8px;font-size:12px;font-weight:850;padding:4px 7px;line-height:1.1;max-width:100%;overflow-wrap:anywhere;box-shadow:0 2px 0 #14372d55}
+.map-place small{display:block;font-size:10px;font-weight:750;color:#eaf1da;background:#294b3de8;padding:3px 4px;border-radius:7px;line-height:1.15;max-width:100%;overflow-wrap:anywhere}
+.map-place.tone-future .map-place-icon{background:linear-gradient(145deg,#d9d8bd,#aebbb0);border-color:#e3e5d0;box-shadow:0 4px 0 #6c8373}
+.map-place.tone-future small{background:#435a50;color:#f0f3df}
+.map-place.tone-reward .map-place-icon{border-color:#ffe69c;background:linear-gradient(150deg,#fff1bc,#e7b961);box-shadow:0 4px 0 #9e773b}
+.map-place.tone-reward small{background:#ffdf8d;color:#42311c}
+.map-place.tone-active small{background:#d7e9c4;color:#244737}
+.map-place[aria-pressed="true"]{border-color:#fff1b7;background:#fce5a325;box-shadow:0 0 0 2px #41664e88}
+.map-place[aria-pressed="true"] .map-place-icon{transform:translateY(-3px)}
+.map-place:active .map-place-icon{transform:translateY(2px) scale(.96)}
+.map-place:focus-visible{outline:3px solid #fff4bf;outline-offset:1px}
+.map-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;padding:12px 0 1px;color:#c5d6bf;font-size:11px}
+.map-legend span{display:flex;gap:5px;align-items:center}
+.map-legend i{width:9px;height:9px;border-radius:50%;background:#c1dfab}
+.map-legend .legend-reward{background:#ffdb82}
+.map-legend .legend-future{background:#a1afa5}
+.map-detail{margin:12px 0 8px;background:linear-gradient(150deg,#2c493a,#1e342d)}
+.map-detail-main{display:flex;align-items:flex-start;gap:12px}
+.map-detail-main>div{flex:1;min-width:0}
+.map-detail-icon{display:grid;place-items:center;width:52px;height:52px;background:#4b6c4f;border:1px solid #759470;border-radius:16px;font-size:30px;flex-shrink:0}
+.map-detail h2{margin:0 0 6px;font-size:20px;line-height:1.2;color:#fff4d8}
+.map-detail p{font-size:12px;line-height:1.5;color:#d0dfc8;margin:0}
+.map-detail .eyebrow{margin-bottom:5px}
+.map-detail .map-detail-note{margin-top:11px;padding:9px;border-radius:10px;color:#f3e5b3;background:#465039}
+.map-future-note{margin-top:12px;background:#34443c;border:1px dashed #7e8d77;border-radius:12px;padding:11px;font-size:12px;color:#d5ddc9}
+@media(max-width:360px){.world-map{min-height:378px}.map-grid{padding:0 3px}.map-place{min-height:91px}.map-place-icon{width:49px;height:49px;font-size:29px;border-radius:16px}.map-place-title{font-size:11px;padding:4px 5px}.map-place small{font-size:9px}.map-legend{gap:9px}}
+@media(prefers-reduced-motion:reduce){.map-ripples{animation:none}.map-place-icon{transition:none!important;transform:none!important}}
+
+[data-world-detail]{scroll-margin-bottom:calc(94px + var(--pets-bottom-offset));scroll-margin-top:12px}

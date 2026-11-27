@@ -761,7 +761,9 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=2", html)
-        self.assertIn("/static/app.js?v=16", html)
+        self.assertIn("/static/app.js?v=17", html)
+        self.assertIn("/static/world-map.js?v=1", html)
+        self.assertIn("/static/world-map.css?v=1", html)
         self.assertIn("/static/pet-life.js?v=1", html)
         self.assertIn("/static/pet-life.css?v=1", html)
         self.assertIn("/static/world-ui.js?v=1", html)
@@ -804,7 +806,7 @@ class MiniAppFeedbackTests(unittest.TestCase):
         self.assertIn('safeAreaInset', js)
         self.assertIn('contentSafeAreaInset', js)
         self.assertIn('window.PetsHouse.renderHouse(p,ui.config)', js)
-        self.assertIn('hubCard("house"', js)
+        self.assertIn("worldMap.renderMap(p,serverNow(),ui.config", js)
         self.assertIn('data-build-room=', (static/"house.js").read_text(encoding="utf-8"))
         self.assertIn('house-scene', (static/"house.css").read_text(encoding="utf-8"))
         self.assertIn('window.PetsBusiness.renderBusiness', js)
@@ -1032,6 +1034,69 @@ assert.match(html,/data-tycoon-order="florist"[^>]*disabled[^>]*>✓ Выпол�
                             text=True, timeout=15, check=False)
         self.assertEqual(cp.returncode, 0, cp.stderr)
 
+    def test_world_map_routes_and_snapshot_statuses(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static = Path(__file__).resolve().parent / "miniapp" / "static"
+        js = (static / "app.js").read_text(encoding="utf-8")
+        css = (static / "world-map.css").read_text(encoding="utf-8")
+        self.assertIn("worldMap.valid(id)", js)
+        self.assertIn("goToTab(place.route)", js)
+        self.assertIn("ui.businessCode=status.businessCode", js)
+        self.assertIn("ui.pet?.id!==snapshot.id", js)
+        self.assertIn("syncWorldMap()", js)
+        self.assertIn("aria-pressed", js)
+        self.assertIn("prefers-reduced-motion:reduce", css)
+        self.assertIn("repeat(3,minmax(0,1fr))", css)
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script = static / "world-map.js"
+        navigation = static / "navigation.js"
+        code = """
+const assert=require("node:assert/strict");
+const m=require(process.argv[1]), n=require(process.argv[2]);
+const p={id:1,best_streak:2,house:true,world_hour:12,chapter:{stage:3},
+  businesses:{units:{florist:{level:1,stock:2,order_done:false},carpenter:{level:1,stock:0,job:{finish_at:120}}},sales_coins_remaining:12}};
+const c={businesses:[{code:"florist",sell_price:2},{code:"carpenter",sell_price:3}],tycoon_rules:{order_quantity:2}};
+assert.equal(m.places.length,9);
+assert.equal(new Set(m.places.map(x=>x.id)).size,9);
+assert.equal(m.valid("__proto__"),false);
+assert.equal(m.valid("unknown"),false);
+for(const place of m.places){
+  const html=m.renderDetail(place.id,p,100,c);
+  if(place.route){
+    const nav=n.create(); nav.select("world");
+    assert.equal(nav.open(place.route),place.route);
+    assert.equal(nav.back(),"world");
+    assert.match(html,/data-map-open=/);
+  } else {
+    assert.doesNotMatch(html,/data-map-open=/);
+    assert.match(html,/В РАЗРАБОТКЕ/);
+  }
+}
+assert.equal(m.status(m.get("house"),p,100,c).text,"Ваш дом");
+assert.equal(m.status(m.get("house"),{...p,house:false},100,c).text,"Построить");
+assert.equal(m.status(m.get("forest"),{...p,trip:{finish_at:101}},100,c).tone,"active");
+assert.equal(m.status(m.get("forest"),{...p,trip:{finish_at:100}},100,c).tone,"reward");
+assert.equal(m.status(m.get("business"),p,100,c).text,"В работе");
+assert.equal(m.status(m.get("business"),p,120,c).businessCode,"carpenter");
+assert.equal(m.recommended(p,120,c),"business");
+assert.equal(m.recommended({...p,trip:{finish_at:99}},120,c),"forest");
+const order={...p,businesses:{...p.businesses,units:{florist:{level:1,stock:2,order_done:false}}}};
+assert.equal(m.status(m.get("business"),order,120,c).text,"Заказ готов");
+assert.equal(m.status(m.get("business"),{...order,businesses:{...order.businesses,sales_coins_remaining:0}},120,c).tone,"open");
+const html=m.renderMap(p,120,c,"night");
+assert.equal((html.match(/data-map-location=/g)||[]).length,9);
+assert.match(html,/map-phase-night/);
+assert.match(html,/tone-reward/);
+assert.doesNotMatch(html,/style=/);
+assert.doesNotMatch(m.renderMap(p,100,c,'"><script>'),/<script>/);
+"""
+        cp = subprocess.run(["node", "-e", code, str(script), str(navigation)], capture_output=True,
+                            text=True, timeout=15, check=False)
+        self.assertEqual(cp.returncode, 0, cp.stderr)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -1039,7 +1104,7 @@ assert.match(html,/data-tycoon-order="florist"[^>]*disabled[^>]*>✓ Выпол�
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
