@@ -39,6 +39,7 @@ const tabs = window.PetsNavigation.tabs;
 const design = window.PetsWorldUI;
 const worldMap = window.PetsMap;
 const country = window.PetsCountryside;
+const arcade = window.PetsArcade;
 const icon = design.icon;
 const life = window.PetsLife;
 const reactionGate = life.createGate();
@@ -468,6 +469,7 @@ function openWorldLocation(id) {
 }
 function games(p) {
   return hub("🎮 Игры","Развивайтесь вместе и выполняйте задания",[
+    hubCard("arcade","🎮","PETS Arcade","Четыре мини-игры, рекорды и опыт"),
     hubCard("business","🏪","PETS Tycoon","Ручная работа, команда, склад и заказы"),
     hubCard("tasks","📋","Задания дня",p.daily.filter(t=>t.claimed).length+" / "+p.daily.length+" наград получено")
   ]);
@@ -693,6 +695,7 @@ function render() {
     house: p => window.PetsHouse.renderHouse(p,ui.config),
     farm: p => country.farm(p,ui.config.countryside,serverNow(),ui.seedCode),
     fishing: p => country.fishing(p,ui.config.countryside,serverNow()),
+    arcade: p => arcade.render(p,ui.config.arcade,serverNow()),
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow(),ui.businessCode),
     market: p => window.PetsMarket.renderMarket(
       ui.market,p,ui.config,ui.marketSelection,serverNow()),
@@ -762,6 +765,22 @@ async function refreshCountryside(){
     }else syncClock(result);
     syncCountryside();
   }catch{/* The next refresh retries; do not interrupt a fishing session with a toast. */}
+  finally{ui.syncing=false;}
+}
+async function refreshArcade(){
+  if(!ui.selected||!TG?.initData||ui.busy||ui.syncing||motionHidden()||
+     !modal.classList.contains("hidden")||ui.tab!=="arcade")return;
+  const id=ui.selected,serial=++ui.syncSerial;
+  ui.syncing=true;
+  try{
+    const result=await api("/api/arcade/"+id);
+    if(serial!==ui.syncSerial||ui.selected!==id||ui.busy||ui.tab!=="arcade")return;
+    syncClock(result);
+    if(JSON.stringify(ui.pet.arcade)!==JSON.stringify(result.arcade)){
+      ui.pet={...ui.pet,arcade:result.arcade};render();
+    }
+    syncArcade();
+  }catch{/* Retry on next entry or refresh. */}
   finally{ui.syncing=false;}
 }
 async function loadMarket({force=false,quiet=true}={}) {
@@ -841,6 +860,7 @@ function displayRoute(tab) {
   if(tab==="season") loadSeason({quiet:false});
   if(tab==="studio") loadStudio({quiet:false});
   if(tab==="farm"||tab==="fishing")refreshCountryside();
+  if(tab==="arcade"){syncArcade();refreshArcade();}
 }
 function goToTab(tab, root=false) {
   if(ui.busy) return;
@@ -1026,6 +1046,76 @@ function syncCountryside(){
   }
 }
 
+function syncArcade(){
+  if(ui.tab!=="arcade"||ui.busy||motionHidden()||!ui.pet?.arcade)return;
+  const run=ui.pet.arcade.active, now=serverNow();
+  const node=app.querySelector("[data-arcade-run]");
+  if(!run||!node||Number(node.dataset.arcadeRun)!==run.id)return;
+  const phase=arcade.phase(run,now);
+  if(phase==="expired"){render();refreshArcade();return;}
+  const timer=node.querySelector("[data-arcade-time]");
+  const text=arcade.seconds(run.expires_at-now);
+  if(timer&&timer.textContent!==text)timer.textContent=text;
+  if(!run.mine||!run.state)return;
+  const s=run.state,status=node.querySelector("[data-arcade-status]"),message=arcade.status(run,now);
+  if(status&&status.textContent!==message)status.textContent=message;
+  if(run.game==="memory"){
+    const memory=node.querySelector("[data-arcade-memory]");
+    if(phase==="recall"&&memory&&memory.dataset.hidden!=="yes"){
+      for(const tile of memory.children)tile.textContent="?";
+      memory.dataset.hidden="yes";
+    }
+    for(const key of node.querySelectorAll("[data-arcade-move]"))key.disabled=phase!=="recall";
+  }else if(run.game==="catch"){
+    const item=node.querySelector("[data-arcade-falling]");
+    if(item){
+      const frac=Math.max(0,Math.min(1,(now-s.start)/(s.ready-s.start)));
+      item.style.setProperty("--fall",Math.round(12+60*frac)+"%");
+      item.hidden=phase==="late";
+    }
+    for(const key of node.querySelectorAll("[data-arcade-move]")){
+      key.disabled=key.dataset.arcadeMove==="-1"?phase!=="late":phase!=="ready";
+    }
+  }else if(run.game==="reaction"){
+    const key=node.querySelector("[data-arcade-move]");
+    if(key&&!key.classList.contains("signal-"+phase)){
+      for(const name of ["waiting","ready","late"])key.classList.toggle("signal-"+name,name===phase);
+      key.querySelector("[data-arcade-signal]").textContent=phase==="ready"?"⚡":phase==="late"?"↻":"●";
+      key.querySelector("[data-arcade-signal-label]").textContent=phase==="ready"?"ЖМИ!":phase==="late"?"ДАЛЬШЕ":"ЖДИ";
+    }
+  }
+}
+async function performArcade(action,game="",move=null){
+  if(ui.busy||motionHidden()||ui.tab!=="arcade"||!ui.pet?.arcade)return;
+  const id=ui.selected,state=ui.pet.arcade,run=state.active;
+  const payload={pet_id:id,action,game};
+  if(action==="start"){
+    if(!ui.config.arcade.games.some(d=>d.code===game))return;
+    payload.expected_last=state.last_id;
+  }else{
+    if(!run?.mine||serverNow()>run.expires_at){syncArcade();return;}
+    payload.run_id=run.id;payload.version=run.version;
+    if(action==="move")payload.move=move;
+  }
+  ui.busy=true;++ui.syncSerial;app.classList.add("is-busy");
+  const before=ui.pet;
+  try{
+    const result=await api("/api/arcade/action",payload);
+    if(ui.selected!==id)return;
+    syncClock(result);
+    if(result.pet){
+      setPet(result.pet);
+      showActionEffect("arcade",game,before,result.pet,result.message);
+      if(result.pet.level<=before.level&&result.arcade.result?.xp)playEffect("⭐ +"+result.arcade.result.xp+" XP","reward");
+      haptic("success");
+    }else{
+      ui.pet={...ui.pet,arcade:result.arcade};render();
+    }
+    showToast(result.message);
+  }catch(e){showToast(e.message);}
+  finally{ui.busy=false;app.classList.remove("is-busy");syncArcade();}
+}
+
 async function perform(kind, code="", extra={}) {
   if (ui.busy) return;
   const id = ui.selected;
@@ -1070,6 +1160,19 @@ document.addEventListener("click", async e=>{
   if (target.dataset.tab) {tap();goToTab(target.dataset.tab);return;}
   if (target.dataset.mapLocation) {selectWorldLocation(target.dataset.mapLocation);return;}
   if (target.dataset.mapOpen) {openWorldLocation(target.dataset.mapOpen);return;}
+  if (target.dataset.click==="arcade-back") {tap();goBack();return;}
+  if(ui.tab==="arcade"){
+    if(ui.busy)return;
+    if(target.dataset.arcadeStart){await performArcade("start",target.dataset.arcadeStart);return;}
+    if(target.dataset.arcadeRefresh){await refreshArcade();return;}
+    if(target.dataset.arcadeCancel){
+      confirmDialog("Завершить игру?","Попытка будет потрачена, награды не будет.",()=>performArcade("cancel"));return;
+    }
+    if(target.dataset.arcadeMove!==undefined&&!target.disabled){
+      const move=target.dataset.arcadeType==="number"?Number(target.dataset.arcadeMove):target.dataset.arcadeMove;
+      await performArcade("move","",move);return;
+    }
+  }
   if (target.dataset.click==="country-back") {tap();goBack();return;}
   if (ui.busy && (ui.tab==="farm"||ui.tab==="fishing")) return;
   if (target.dataset.countrySeed && ui.tab==="farm") {
@@ -1430,6 +1533,10 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("online", () => refreshPet({force:true,quiet:false}));
 window.addEventListener("offline", () => showToast("Нет подключения к интернету"));
+// Fast lightweight updates only while the arcade is visible and running.
+setInterval(()=>{
+  if(!motionHidden()&&!ui.busy&&ui.tab==="arcade"&&ui.pet?.arcade?.active)syncArcade();
+},100);
 // Cheap countdown updates, only on the visible game screen.
 setInterval(()=>{
   if(motionHidden()||ui.busy)return;
@@ -1440,6 +1547,7 @@ setInterval(()=>{
 // A short state-only poll lets the partner see a cast before its bite window closes.
 setInterval(()=>{
   if(ui.tab==="fishing")refreshCountryside();
+  if(ui.tab==="arcade"&&(!ui.pet?.arcade?.active?.mine||serverNow()>ui.pet.arcade.active.expires_at))refreshArcade();
 },4000);
 setInterval(() => {
   if(motionHidden()) return;
