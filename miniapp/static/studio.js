@@ -16,10 +16,7 @@
     if(!own.has(code))return "";
     const progress=number(x.progress),goal=number(x.goal);
     const line=goal>0
-      ?'<div class="studio-progress"><div class="progress" role="progressbar" '+
-       'aria-label="Прогресс украшения" aria-valuemin="0" aria-valuemax="'+goal+
-       '" aria-valuenow="'+Math.min(progress,goal)+'">'+
-       '<i style="width:'+pct(progress,goal)+'%"></i></div>'+
+      ?'<div class="studio-progress"><progress class="game-progress progress" aria-label="Прогресс украшения" max="'+goal+'" value="'+Math.min(progress,goal)+'"></progress>'+
        '<span>'+Math.min(progress,goal)+' / '+goal+'</span></div>'
       :'<div class="studio-free">🎁 Открыто каждому</div>';
     return '<div class="studio-style-item '+(equipped?'equipped':ready?'ready':'locked')+'">'+

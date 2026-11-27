@@ -1,0 +1,180 @@
+/* PETS WORLD 2.0 — enchanted valley, shared game HUD.
+   Loaded after feature styles; no remote fonts, images, canvas or filter loops. */
+:root{
+  --bg:#101d20;--pane:#192c2c;--pane-solid:#233d37;--border:#37534a;
+  --text:#f4f4e7;--muted:#b3c5b9;--cyan:#92e0bb;--gold:#ffda8b;--purple:#7881c2;
+  --game-shadow:0 6px 0 #09171480,0 12px 26px #06120d33;
+}
+body{background:#101d20;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+#shell{padding-inline:14px;background:linear-gradient(180deg,#213b33 0,#142b29 260px,#101d20 650px)}
+.ambient{display:none}
+.ui-icon{display:inline-block;width:22px;height:22px;vertical-align:middle;flex-shrink:0}
+.topbar{height:auto;min-height:59px;gap:9px;padding-bottom:8px}
+.brand-mark{width:42px;height:42px;border-radius:15px;background:linear-gradient(150deg,#b7efac,#5bad8b);border:1px solid #d5f8c3;color:#193e32;box-shadow:0 4px 0 #30634b;flex-shrink:0}
+.brand-mark .ui-icon{width:27px;height:27px;fill:currentColor;stroke-width:1}
+.brand strong{font-size:16px;letter-spacing:.025em;line-height:1.1}
+.brand strong span{color:#c6e7ab;margin-left:3px}
+.brand small{display:block;font-size:10px;color:#c0d0bb;margin-top:3px;white-space:normal}
+.wallet{display:flex;align-items:center;gap:6px;padding:8px 11px;background:#182a26;border:1px solid #746843;border-radius:15px;color:var(--gold);box-shadow:0 3px 0 #0f201c}
+.wallet .ui-icon{width:20px;height:20px}
+.wallet b{font-size:15px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.game-tools{margin:4px 0 11px;gap:8px}
+.game-tools .picker{background:#243e35;border-color:#496352;min-height:44px;font-size:13px;color:var(--text)}
+.picker-item{background:#21392f;border-color:#4b6a58}
+.quick-access .btn{display:flex;align-items:center;gap:6px;padding:8px 12px}
+.quick-access .ui-icon{width:19px;height:19px}
+.panel{border-radius:20px;background:var(--pane);border:1px solid var(--border);box-shadow:var(--game-shadow);backdrop-filter:none;padding:15px}
+.btn{background:linear-gradient(180deg,#3b5b4d,#2c493f);border-color:#5a7963;color:#f2f6ec;box-shadow:0 3px 0 #0b1c16a0;border-radius:14px}
+.btn-primary{background:linear-gradient(180deg,#bce99b,#79bd86);color:#163d2d;border-color:#d1f6b6}
+.btn-cyan{background:linear-gradient(180deg,#ffd99a,#daa65d);color:#493016;border-color:#ffe8b7}
+.btn-quiet{background:#253d36;border-color:#3e5b4d;box-shadow:none}
+.btn:disabled{opacity:.62;box-shadow:none}
+.btn:active{transform:translateY(2px);box-shadow:none}
+.notice{color:#d9eed7;background:#243d31;border-color:#84bf8e;border-radius:12px;line-height:1.5}
+.eyebrow{color:#b7dca3;font-size:10px;letter-spacing:.11em}
+.section-heading{color:#f4f0db;font-size:25px;line-height:1.2;font-weight:850;margin:16px 0 6px}
+.section-lead,.subtitle,.card-text small{color:var(--muted)}
+.card-icon,.hub-icon{background:linear-gradient(145deg,#426755,#2b4539);color:#d2edc0}
+.chip{background:#354c40;color:#e3eecf}
+.chip-green{background:#224d3a;color:#a8eac2}
+.chip-purple{background:#3d415c;color:#e5ddff}
+.pill{background:#1b302b;color:#c1d2c2;min-height:40px}
+.pill.active{background:#aed69b;color:#1b392a;border-color:#d6e8ac}
+.progress{background:#10231f}.progress i{background:linear-gradient(90deg,#76c89b,#c9e69e)}
+.stat{background:#263d33}.stat span{color:#d1ddc6}
+.modal{background:#233b32;border-color:#60816b;color:var(--text)}
+.modal p{color:#d0dfcf}
+.toast{background:#254b3b;border-color:#91bf91;color:#f5f8e9;max-width:calc(100vw - 28px)}
+.spinner{border-color:#354f43;border-top-color:#c5e7a5}
+.bottom-nav{height:calc(80px + var(--pets-bottom-offset));padding:8px 9px var(--pets-bottom-offset);background:#172c27;border-top:1px solid #466a55;box-shadow:0 -6px 20px #081a1580;backdrop-filter:none;gap:3px}
+.nav-btn{min-height:62px;padding:7px 2px 6px;border-radius:14px;gap:5px;color:#aebfb2;font-size:10px;position:relative}
+.nav-btn .nav-symbol{width:35px;height:31px;display:grid;place-items:center;border-radius:11px}
+.nav-btn .ui-icon{width:23px;height:23px}
+.nav-btn.active{color:#e4f2c5;background:#2c4838}
+.nav-btn.active .nav-symbol{background:linear-gradient(160deg,#d4eaa7,#8ec98e);color:#274e37;box-shadow:0 2px 0 #5c915e}
+.nav-btn.active:after{content:"";position:absolute;bottom:2px;left:calc(50% - 8px);width:16px;height:2px;border-radius:9px;background:#cbe9ab}
+
+/* A scenic pet portrait: the original asset remains unmodified and uncropped. */
+.pet-scene.hero{--sky-top:#75b9bc;--sky-bottom:#e2e8b3;--orb:#fff0a5;--far:#8baa98;--mid:#639e80;--near:#42846b;--trees:#386c58;--cloud:#f2f2ce;
+  position:relative;isolation:isolate;overflow:hidden;border:1px solid #88a88c;border-radius:25px;
+  background:linear-gradient(175deg,var(--sky-top),var(--sky-bottom));min-height:310px;
+  padding:50px 12px 41px;box-shadow:0 6px 0 #10271e,0 14px 28px #081b1555}
+.pet-scene.phase-morning{--sky-top:#e2a792;--sky-bottom:#ffe4a8;--orb:#fff2b0;--far:#a9b5a2;--mid:#73a48b;--near:#47846d;--trees:#3a7763;--cloud:#fff0ce}
+.pet-scene.phase-evening{--sky-top:#615a91;--sky-bottom:#e7ad89;--orb:#ffe0a2;--far:#9a8f9c;--mid:#657f82;--near:#3c6468;--trees:#2b5359;--cloud:#f5c6bb}
+.pet-scene.phase-night{--sky-top:#172847;--sky-bottom:#536a8b;--orb:#e4edcf;--far:#4d6481;--mid:#375967;--near:#264b50;--trees:#1a3b40;--cloud:#8093aa}
+.scene-landscape{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+.scene-orb{fill:var(--orb);opacity:.9}
+.scene-hill-far{fill:var(--far)}.scene-hill-mid{fill:var(--mid)}.scene-hill-near{fill:var(--near)}.scene-trees{fill:var(--trees)}
+.scene-cloud{fill:var(--cloud);opacity:.73;animation:cloud-drift 19s ease-in-out infinite alternate}
+.cloud-b{animation-duration:24s;animation-direction:alternate-reverse}
+.scene-stars{fill:#fff6c2;stroke:#fff6c2;stroke-width:1.3;opacity:0}
+.phase-night .scene-stars,.phase-evening .scene-stars{opacity:.8;animation:star-glow 4.5s ease-in-out infinite alternate}
+@keyframes cloud-drift{from{transform:translateX(-7px)}to{transform:translateX(12px)}}
+@keyframes star-glow{from{opacity:.38}to{opacity:.95}}
+.scene-top{position:absolute;top:11px;left:11px;right:11px;display:flex;justify-content:space-between;align-items:center;gap:7px;z-index:3;pointer-events:none}
+.scene-badge{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:800;line-height:1.25;color:#faf3da;background:#193b32e8;border:1px solid #e2edca60;border-radius:99px;padding:7px 9px}
+.scene-badge .ui-icon{width:15px;height:15px}
+.scene-level{background:#f9edc9;color:#3e5032;border-color:#fff2d6}
+.pet-portrait.studio-frame{position:relative;z-index:1;margin:auto;width:min(64%,242px);aspect-ratio:1;border-radius:25px;overflow:hidden;box-shadow:0 8px 0 #173b3560,0 13px 24px #102e275c;background:#d6e6c6}
+.pet-portrait.studio-frame:before{inset:3px;border-width:3px;border-radius:22px;box-shadow:inset 0 0 8px var(--studio-glow)}
+.pet-scene .pet-portrait img{width:100%;height:100%;max-height:none;object-fit:contain;display:block}
+.pet-scene .studio-hero-sticker{width:35px;height:35px;bottom:8px;left:8px;font-size:20px;box-shadow:none}
+.pet-scene .pet-touch{z-index:2}
+.pet-scene .pet-hint{position:absolute;right:8px;bottom:8px;padding:5px 8px;font-size:10px}
+.scene-caption{position:absolute;bottom:8px;left:10px;right:10px;z-index:2;text-align:center;color:#fff4d8;font-size:11px;font-weight:750;text-shadow:0 1px 3px #18352d;pointer-events:none}
+.scene-caption .ui-icon{width:13px;height:13px}
+.pet-dashboard{margin:12px 0 10px;padding:14px;background:linear-gradient(155deg,#263f34,#1a2e2a)}
+.pet-identity{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:12px}
+.pet-identity-main{min-width:0}
+.pet-identity .hero-title{margin:0;color:#fbf5dd;font-size:25px;line-height:1.1;overflow-wrap:anywhere}
+.pet-partner{display:flex;align-items:center;gap:5px;font-size:11px;color:#d0e0cb;margin-top:5px;line-height:1.3;overflow-wrap:anywhere}
+.pet-partner .ui-icon{width:15px;height:15px;color:#edba9d}
+.streak-pill{display:flex;align-items:center;gap:5px;padding:8px 10px;background:#493c2e;border:1px solid #9a7649;border-radius:13px;color:#ffe0a0;font-size:13px;font-weight:800;flex-shrink:0}
+.streak-pill .ui-icon{width:17px;height:17px;color:#ffc174}
+.need-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.need{display:grid;gap:4px;padding:8px 8px 9px;border:1px solid #46604b;border-radius:13px;background:#172d26;min-width:0;--bar:#a0d99b}
+.need-heart{--bar:#eeb5b4}.need-bolt{--bar:#f4d18c}
+.need.is-low{--bar:#f6a195}.need.is-medium{--bar:#e9c783}
+.need-label{display:flex;align-items:center;gap:3px;color:#c3d3bd;font-size:10px;line-height:1.25;overflow-wrap:anywhere}
+.need-label .ui-icon{width:14px;height:14px;color:var(--bar)}
+.need b{font-size:18px;font-variant-numeric:tabular-nums;color:var(--bar)}
+.game-progress{display:block;appearance:none;-webkit-appearance:none;width:100%;height:7px;border:0;border-radius:99px;overflow:hidden;background:#0f211b;color:var(--bar,#a9d795)}
+.game-progress::-webkit-progress-bar{background:#0f211b;border-radius:99px}
+.game-progress::-webkit-progress-value{background:var(--bar,#a9d795);border-radius:99px}
+.game-progress::-moz-progress-bar{background:var(--bar,#a9d795);border-radius:99px}
+.xp-hud{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;margin-top:12px;color:#d5e5c4;font-size:11px;--bar:#b9dfa0}
+.xp-hud b{display:flex;gap:5px;align-items:center;font-size:12px}
+.xp-hud .ui-icon{width:15px;height:15px;color:var(--gold)}
+.xp-hud .game-progress{grid-column:1/-1;height:8px}
+.xp-hud small{color:#b4c7b1;font-size:10px}
+.pet-dashboard .mood-caption{margin-top:9px;color:#d8e4d3;font-size:12px}
+.care-dock{padding:10px 0 7px}
+.care-dock-title{display:flex;justify-content:space-between;gap:6px;align-items:center;padding:0 3px}
+.care-dock-title strong{font-size:15px;color:#eef0d7}
+.care-dock-title small{color:#b1c8b7;font-size:10px}
+.care-dock .buttons{margin-top:9px;gap:8px}
+.care-button{background:#263f33;min-height:102px;border:1px solid #4d6c51;border-radius:18px;padding:8px 4px 10px;gap:6px}
+.care-button .care-emblem{display:grid;place-items:center;width:43px;height:43px;border-radius:50%;background:linear-gradient(160deg,#ffe4a2,#d5ab62);border:1px solid #fff1bd;box-shadow:0 3px 0 #8b6a39;color:#62421e}
+.care-button .care-emblem .ui-icon{width:24px;height:24px}
+.care-button[data-code="play"] .care-emblem{background:linear-gradient(160deg,#fbd2b9,#d99190);border-color:#ffdfca;box-shadow:0 3px 0 #986368;color:#643c44}
+.care-button[data-code="sleep"] .care-emblem{background:linear-gradient(160deg,#c8c8f2,#9b9cd5);border-color:#e5e4ff;box-shadow:0 3px 0 #676799;color:#41416d}
+.care-button .care-name{font-size:12px;white-space:normal;line-height:1.2;color:#f1f3df}
+.care-button small{font-size:10px;color:#bfdfb8;text-align:center}
+.care-button:disabled .care-emblem{filter:saturate(.6)}
+.care-button:disabled small{color:#d2ddce}
+.pair-status{display:flex;align-items:center;gap:9px;padding:11px 12px;border:1px solid #3c594c;border-radius:15px;background:#1a3029;color:#d1e2ca;font-size:12px;line-height:1.4;margin:8px 0 12px}
+.pair-status .ui-icon{color:#a7d49c}
+.pair-status.pair-complete{background:#263f2e;border-color:#577950}
+.home-shortcuts{gap:7px;margin:9px 0 12px}
+.home-shortcuts .hub-card{min-height:59px;padding:8px 10px;grid-template-columns:36px minmax(0,1fr) 16px}
+.home-shortcuts .hub-icon{height:36px;width:36px;border-radius:10px}
+.home-shortcuts .hub-icon .ui-icon{width:20px;height:20px}
+.hub-card{background:#213a30;border-color:#47654e;box-shadow:0 3px 0 #0d211a;gap:10px}
+.hub-copy strong{font-size:14px;color:#f6f1dc}.hub-copy small{color:#c1d1b8}
+.hub-arrow .ui-icon{width:17px;height:17px;color:#b8d5a5}
+.hub-card .hub-icon .ui-icon{width:27px;height:27px}
+.hub-card[data-tab="tasks"] .hub-icon{background:#534d32;color:#ffe0a0}
+.hub-card[data-tab="studio"] .hub-icon,.hub-card[data-tab="season"] .hub-icon{background:#4b4967;color:#e2daff}
+.hub-card[data-tab="business"] .hub-icon,.hub-card[data-tab="market"] .hub-icon{background:#5b4835;color:#f9d79e}
+.hub-card[data-tab="trips"] .hub-icon{background:#355d58;color:#c5efe0}
+.hub-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin-top:14px}
+.hub-list .hub-card{position:relative;display:flex;flex-direction:column;align-items:flex-start;text-align:left;justify-content:flex-end;min-height:158px;padding:13px;overflow:hidden;background:linear-gradient(160deg,#355545,#223b30)}
+.hub-list .hub-icon{width:57px;height:57px;border-radius:19px;box-shadow:0 4px 0 #142e23a0;border:1px solid #b6d8a444;margin:0 0 auto}
+.hub-list .hub-icon .ui-icon{width:32px;height:32px}
+.hub-list .hub-copy{width:100%;min-height:52px;margin-top:13px}
+.hub-list .hub-arrow{position:absolute;top:14px;right:10px}
+.hub-list .hub-card:after{content:"";position:absolute;width:110px;height:110px;border:1px solid #d8f4bd1c;border-radius:50%;right:-50px;top:-35px;pointer-events:none}
+.hub-list .hub-card:last-child:nth-child(odd){grid-column:1/-1;min-height:105px;display:grid;grid-template-columns:57px minmax(0,1fr);align-items:center}
+.hub-list .hub-card:last-child:nth-child(odd) .hub-icon{margin:0}
+.hub-list .hub-card:last-child:nth-child(odd) .hub-copy{margin:0;min-height:0;padding-right:12px}
+/* Cohesive secondary screens without replacing their functional content. */
+.task-summary,.inventory-total,.house-overview,.studio-preview-panel,.studio-catalog,.studio-album,.studio-coop{
+  background:linear-gradient(145deg,#304b3d,#233930);border-color:#49684e
+}
+.resource-card,.house-room,.recipe-card{background:linear-gradient(150deg,#2c463a,#1e342d);border-color:#45614d}
+.resource-card.uncommon{background:linear-gradient(140deg,#374b60,#253c45);border-color:#688ba8}
+.resource-card.rare{background:linear-gradient(140deg,#5b4c3a,#3a4236);border-color:#9c885b}
+.card-text strong,.h2,.title{overflow-wrap:anywhere}
+.effect-card{background:linear-gradient(135deg,#44634e,#263c31);color:#fff7d9;border-color:#c1e49b;box-shadow:0 15px 40px #0e241b9c}
+.effect-level{background:linear-gradient(135deg,#82623b,#635538);border-color:#ffe0a0}
+.motion-paused *,.motion-paused *:before,.motion-paused *:after{animation-play-state:paused!important}
+@media(max-width:360px){
+  #shell{padding-inline:10px}
+  .brand strong{font-size:14px}.brand small{font-size:9px}.brand-mark{width:37px;height:37px}.wallet{padding:7px 8px}
+  .pet-scene.hero{min-height:265px;padding:46px 8px 33px}
+  .pet-portrait.studio-frame{width:min(68%,210px)}
+  .scene-badge{font-size:10px;padding:6px 7px}
+  .pet-dashboard{padding:11px}.need{padding:7px 5px}.need-grid{gap:5px}.need-label{font-size:9px}
+  .care-button .care-name{font-size:11px}.nav-btn{font-size:9px}.hub-list{gap:8px}.hub-list .hub-card{padding:10px;min-height:145px}
+}
+@media(prefers-reduced-motion:reduce){
+  .scene-cloud,.scene-stars{animation:none!important}
+  .pet-scene.pet-waving img{transform:none}
+  .btn,.hub-card,.nav-btn{transition:none!important}
+}
+
+/* Native progress elements also work under the strict server CSP. */
+.profession-row{margin-top:14px}
+.game-progress.task-progress,.game-progress.house-progress{height:9px}
+.game-progress.league-badge-progress{height:6px;margin-top:8px}
+.game-progress.business-progress{margin-top:12px}
