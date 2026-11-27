@@ -19,10 +19,10 @@ from pet_care import (
 from pet_game import DAILY_START_LIMIT, PROFESSIONS, ROUTES, TASKS, legacy_xp, level_for
 from pet_inventory import MATERIALS, RECIPES, loot_for, loot_summary
 from pet_home import MAX_ROOM_LEVEL, ROOMS, room_effect, route_loot
-from pet_countryside_db import PetCountrysideDatabase
+from pet_arcade_db import PetArcadeDatabase
 
 
-class PetGameDatabase(PetCountrysideDatabase):
+class PetGameDatabase(PetArcadeDatabase):
     async def _migrate_pet_game(self):
         db = self._require()
         cols = {
@@ -131,6 +131,7 @@ class PetGameDatabase(PetCountrysideDatabase):
             )
         await self._migrate_business()
         await self._migrate_countryside()
+        await self._migrate_arcade()
         await self._migrate_seasons()
         await self._migrate_studio()
 
