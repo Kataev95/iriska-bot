@@ -40,6 +40,7 @@ const design = window.PetsWorldUI;
 const worldMap = window.PetsMap;
 const country = window.PetsCountryside;
 const arcade = window.PetsArcade;
+const progression = window.PetsProgression;
 const icon = design.icon;
 const life = window.PetsLife;
 const reactionGate = life.createGate();
@@ -185,7 +186,7 @@ function showActionEffect(kind, code, before, after, message) {
   const careConfirmed=kind==="care"&&(message.startsWith("✅")||message.startsWith("💕"));
   const localCare=careConfirmed&&reactPet(after,code,true);
   if (after.level > before.level) {
-    playEffect("🎉 Новый уровень! "+after.level+" / 20", "level");
+    playEffect("🎉 Новый уровень! "+after.level+" / "+(after.max_level||ui.config.progression?.max_level||100), "level");
     haptic("success");
     return;
   }
@@ -201,6 +202,9 @@ function showActionEffect(kind, code, before, after, message) {
   if (kind === "wear" && before.worn.join(",") !== after.worn.join(",")) {
     playEffect("🎀 Образ обновлён", "care");
     return;
+  }
+  if (["skill_learn","specialization","level_claim"].includes(kind)&&message.startsWith("✅")) {
+    playEffect(message,kind==="level_claim"?"reward":"level");return;
   }
   if (kind === "profession" && before.profession !== after.profession) {
     playEffect("🎓 Новая профессия!", "level");
@@ -298,7 +302,7 @@ function hero(p) {
   return '<section class="hero pet-scene phase-'+phase+' pose-'+pose+'" data-pet-id="'+p.id+'" aria-label="Долина питомца">'+design.landscape()+
     '<div class="scene-top"><span class="scene-badge">'+icon(phase==="night"?"sleep":"sun")+
     safe(design.phaseLabel(p.world_hour))+'</span><span class="scene-badge scene-level">'+icon("star")+
-    'Ур. '+p.level+' / 20</span></div>'+
+    'Ур. '+p.level+' / '+(p.max_level||100)+'</span></div>'+
     '<div class="pet-portrait studio-frame studio-frame-'+frame+'">'+
     '<div class="pet-motion"><img class="pet-art" src="'+safe(p.image)+'" alt="Питомец '+safe(p.name)+'" decoding="async" fetchpriority="high"></div>'+
     '<span class="studio-hero-sticker" aria-hidden="true">'+sticker+'</span>'+
@@ -316,6 +320,7 @@ function petDashboard(p){
   return '<section class="panel pet-dashboard"><div class="pet-identity"><div class="pet-identity-main">'+
     '<div class="hero-title">'+safe(p.name)+'</div><div class="pet-partner">'+icon("heart")+
     'Вместе с '+safe(p.partner)+'</div>'+
+    (p.progression?.evolution?'<div class="chip chip-green">'+safe(p.progression.evolution.icon+" "+p.progression.evolution.name)+'</div>':'')+
     (p.season_title?'<div class="chip chip-purple season-name-tag">'+safe(p.season_title)+'</div>':'')+
     '</div><div class="streak-pill" aria-label="Серия '+p.streak+' дней">'+icon("flame")+p.streak+' дн.</div></div>'+
     '<div class="need-grid">'+design.needs(p.food,"Сытость","feed")+design.needs(p.joy,"Настроение","heart")+
@@ -354,13 +359,13 @@ function weeklyChapter(p) {
   } else {
     const routes = {park:"Короткий за древесиной",ruins:"Дальний за кристаллом"};
     action = '<div class="chapter-routes">'+ui.config.routes.filter(route=>route.code in routes).map(route=>{
-      const energy = route.energy-(p.profession==="artisan"?3:0);
+      const energy = Math.max(1,route.energy-(p.progression?.effects.trip_energy??(p.profession==="artisan"?3:0)));
       const locked = p.trips_remaining===0 || p.food<20 || p.energy<energy;
       return '<button class="btn btn-primary" data-action="chapter_start" data-code="'+safe(route.code)+
         '" data-chapter="'+safe(chapter.code)+'" '+(locked?'disabled':'')+'>'+
         safe(routes[route.code])+' · '+duration(route.seconds)+'</button>';
     }).join("")+'</div>'+
-      '<p class="subtitle">'+(p.trips_remaining===0?"Лимит походов на сегодня исчерпан.":"Для выхода нужно 20 сытости и 10–30 энергии до бонуса профессии.")+'</p>';
+      '<p class="subtitle">'+(p.trips_remaining===0?"Лимит походов на сегодня исчерпан.":"Для выхода нужно 20 сытости и достаточно энергии с учётом навыков.")+'</p>';
   }
   return '<section class="panel weekly-chapter"><div class="eyebrow">ПРИКЛЮЧЕНИЕ НЕДЕЛИ</div>'+
     '<h2 class="h2">🍂 '+safe(chapter.title)+'</h2>'+
@@ -524,9 +529,9 @@ function tripRoutes(p) {
     '<div class="notice">🎟 Походов осталось сегодня: <b>'+value(p.trips_remaining ?? 3)+'/3</b></div>'+
 
     ui.config.routes.map(r => {
-      const bonusXp = p.profession === "explorer" ? Math.floor(r.xp*1.2) : r.xp;
-      const energy = r.energy-(p.profession==="artisan" ? 3:0);
-      const coins = r.coins+(p.profession==="merchant" ? 1:0);
+      const bonusXp = Math.floor(r.xp*(p.progression?.effects.trip_xp_percent??(p.profession==="explorer"?120:100))/100);
+      const energy = Math.max(1,r.energy-(p.progression?.effects.trip_energy??(p.profession==="artisan"?3:0)));
+      const coins = r.coins+(p.progression?.effects.trip_coins??(p.profession==="merchant"?1:0));
       const time = r.seconds<3600 ? r.seconds/60+' мин' : r.seconds/3600+' ч';
       const limited = p.trips_remaining === 0;
       const locked = limited || p.food<20 || p.energy<energy;
@@ -577,21 +582,7 @@ function shop(p) {
     }).join("");
 }
 function growth(p) {
-  const target=p.next_xp;
-  return '<div class="section-heading">⭐ Развитие</div>'+
-    '<p class="section-lead">Уровень и профессия сохраняются навсегда.</p>'+
-    '<div class="panel"><div class="eyebrow">ПРОГРЕСС</div><div class="title">Уровень '+p.level+' / 20</div>'+
-    '<p class="muted">'+p.xp+' XP · '+(target==null?'Максимальный уровень':'до следующего '+(target-p.xp)+' XP')+'</p>'+
-    '<div class="stat-grid"><div class="stat"><span>🔥 Серия</span><strong>'+p.streak+'</strong></div>'+
-    '<div class="stat"><span>🏅 Рекорд</span><strong>'+p.best_streak+'</strong></div>'+
-    '<div class="stat"><span>🧊 Заморозки</span><strong>'+p.freezes+'</strong></div></div></div>'+
-    '<div class="panel"><div class="eyebrow">СПЕЦИАЛИЗАЦИЯ</div><div class="h2">🎓 Профессия</div>'+
-    (p.profession?'<div class="notice">✅ '+safe(p.profession_title)+' · выбрана для обоих хозяев</div>':
-      p.level<5?'<div class="notice">🔒 Откроется на 5-м уровне.</div>':
-      ui.config.professions.map(job=>'<div class="card-row profession-row">'+
-        '<div class="card-text"><strong>'+safe(job.name)+'</strong><small>'+safe(job.effect)+'</small></div>'+
-        '<button class="btn btn-primary" data-profession="'+safe(job.code)+'">Выбрать</button></div>').join("")
-    )+'</div>';
+  return progression.render(p,ui.config);
 }
 function inventory(p) {
   const stock = p.materials || {};
@@ -1409,7 +1400,7 @@ document.addEventListener("click", async e=>{
       }).join(", ");
       confirmDialog("Запустить производство?",
         "Ресурсы с общего склада: "+cost+". Товары можно забрать через "+
-        window.PetsBusiness.duration(window.PetsBusiness.workerDuration(unit,ui.pet.businesses?.units?.[unit.code]||{},ui.config.tycoon_rules||{}))+". Можно ускорить партию нажатиями.",
+        window.PetsBusiness.duration(window.PetsBusiness.workerDuration(unit,ui.pet.businesses?.units?.[unit.code]||{},ui.config.tycoon_rules||{},ui.pet.progression?.effects.production_percent??100))+". Можно ускорить партию нажатиями.",
         ()=>perform("business_start",unit.code));
     }
     return;
@@ -1464,6 +1455,21 @@ document.addEventListener("click", async e=>{
     const item=ui.config.shop.find(i=>i.code===target.dataset.buy);
     if(item)confirmDialog('Купить '+item.name+'?','С баланса спишется '+item.price+' 🍬. '+item.info,
       ()=>perform("buy",item.code));return;
+  }
+  if(target.dataset.click==="growth-back"){tap();goBack();return;}
+  if(ui.tab==="growth"&&target.dataset.skill&&!target.disabled){
+    const code=target.dataset.skill,rank=Number(target.dataset.rank);
+    const skill=ui.config.progression.skills.find(x=>x.code===code);
+    if(skill)confirmDialog("Улучшить "+skill.name+"?","Потратить 1 общее очко навыков. Сброс пока недоступен.",()=>perform("skill_learn",code,{expected_rank:rank}));
+    return;
+  }
+  if(ui.tab==="growth"&&target.dataset.specialization&&!target.disabled){
+    const spec=ui.config.progression.specializations.find(x=>x.code===target.dataset.specialization);
+    if(spec)confirmDialog("Выбрать "+spec.name+"?","Общий постоянный выбор. Профессия сохранится.",()=>perform("specialization",spec.code));
+    return;
+  }
+  if(ui.tab==="growth"&&target.dataset.levelClaim&&!target.disabled){
+    await perform("level_claim","",{level:Number(target.dataset.levelClaim)});return;
   }
   if(target.dataset.profession) {
     const job=ui.config.professions.find(j=>j.code===target.dataset.profession);

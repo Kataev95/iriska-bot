@@ -181,7 +181,9 @@ class PetCountrysideDatabase(PetBusinessDatabase):
             if action=="water":
                 if row["watered"] or now>=row["ready_at"]:
                     return "Грядка уже полита или урожай готов"
-                finish=max(now,row["ready_at"]-definition.seconds*WATER_PERCENT[levels["tool"]-1]/100)
+                bonuses = await self._progression_effects(db, pet)
+                percent = WATER_PERCENT[levels["tool"]-1] + bonuses["water_bonus"]
+                finish=max(now,row["ready_at"]-definition.seconds*percent/100)
                 await db.execute(
                     "UPDATE pet_farm_plots SET watered=1,ready_at=?,version=version+1 WHERE pet_id=? AND slot=?",
                     (finish,pet_id,slot)

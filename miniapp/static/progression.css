@@ -1,0 +1,38 @@
+/* Progression: compact mobile-first character sheet, gold and forest palette. */
+.growth-banner{margin:12px 0;padding:17px;border-radius:22px;border:1px solid #a48f60;background:linear-gradient(145deg,#344e3a,#5c5131)}
+.growth-banner-main{display:flex;align-items:center;gap:12px;margin:10px 0 15px}
+.growth-emblem{display:grid;place-items:center;flex-shrink:0;width:70px;height:70px;border-radius:23px;background:#d9bd77;border:2px solid #f9e3aa;font-size:42px;box-shadow:0 4px 0 #59482b}
+.growth-banner h1{color:#fff3ce;font-size:23px;line-height:1.15;margin:0 0 5px}
+.growth-banner-main p{font-size:13px;color:#e4ddb8;margin:0}
+.growth-xp{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px;color:#f5e5bb;margin-bottom:7px}
+.growth-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:12px 0}
+.growth-stats>div{background:#263e32;border:1px solid #587457;border-radius:12px;padding:10px 7px;display:grid;gap:4px}
+.growth-stats small{font-size:10px;color:#c5d6bd}.growth-stats b{font-size:18px;color:#f9e3a7}
+.growth-section h2{font-size:16px;margin:0 0 12px;color:#f8ecd0}
+.evolution-track{display:grid;gap:7px}
+.evolution-step{display:flex;align-items:center;gap:10px;padding:8px;border-radius:12px;background:#22382f;border:1px solid #455d4a}
+.evolution-step>span{display:grid;place-items:center;font-size:22px;width:38px;height:38px;background:#365344;border-radius:10px}
+.evolution-step>div,.growth-option>div,.growth-milestone>div,.skill-top>div{flex:1;min-width:0}
+.evolution-step b,.evolution-step small,.growth-option b,.growth-option small,.skill-top b,.skill-top small{display:block;overflow-wrap:anywhere}
+.evolution-step b,.growth-option b,.skill-top b,.growth-milestone b{font-size:13px}
+.evolution-step small,.growth-option small,.skill-top small{font-size:11px;color:#c2d0ba;margin-top:3px}
+.evolution-step strong{font-size:11px;color:#ebd39b}
+.evolution-step.locked{opacity:.82}
+.evolution-step.current{border-color:#e4c67f;background:#49573a}
+.growth-option,.growth-milestone{display:flex;align-items:center;gap:9px;padding:9px 0;border-top:1px solid #50624e}
+.growth-option .btn,.growth-milestone .btn{flex-shrink:0;max-width:43%;font-size:11px;padding:9px;min-height:44px}
+.growth-points{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#3e5336;padding:12px;border:1px solid #829461;border-radius:12px;font-size:12px}
+.growth-points b{font-size:20px;color:#ffe1a0}
+.skill-branch{margin:14px 0 4px}.skill-branch h3{margin:0 0 8px;font-size:13px;color:#f1dba4}
+.skill-node{background:#263e32;border:1px solid #557657;border-radius:14px;padding:10px;margin-bottom:7px}
+.skill-node+.skill-node{margin-left:13px;border-left:3px solid #9caa78}
+.skill-top{display:flex;align-items:center;gap:9px}
+.skill-icon{font-size:25px;line-height:1;flex-shrink:0}
+.skill-pips{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin:10px 0}
+.skill-pips i{height:6px;border-radius:6px;background:#192f26;border:1px solid #688060}.skill-pips i.filled{background:#f0d18a;border-color:#ffe8b1}
+.skill-node .btn{min-height:44px;font-size:12px}
+.growth-materials{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.growth-material{font-size:11px;padding:4px 6px;background:#1a3228;border-radius:7px;color:#e3ddbd}
+.growth-milestone.ready b{color:#ffe0a2}
+.growth-section button:focus-visible{outline:2px solid #fff3bd;outline-offset:2px}
+@media(max-width:360px){.growth-emblem{width:55px;height:55px;font-size:34px}.growth-banner h1{font-size:20px}.growth-option .btn{padding:7px}}

@@ -2,12 +2,15 @@
 
 from dataclasses import dataclass
 
-MAX_LEVEL = 20
+MAX_LEVEL = 100
 DAILY_START_LIMIT = 3
 PROFESSIONS = {
     "explorer": ("Исследователь", "+20% опыта за поход"),
     "artisan": ("Ремесленник", "на 3 меньше энергии для похода"),
     "merchant": ("Торговец", "+1 ириска за поход"),
+    "guardian": ("Хранитель", "+5 сытости при кормлении"),
+    "gardener": ("Садовник", "+10 п.п. ускорения при поливе"),
+    "engineer": ("Инженер", "−10% времени новых партий производства"),
 }
 TASKS = {
     "care": ("Позаботиться о питомце", 15),
@@ -55,7 +58,11 @@ ROUTES = {
 
 
 def xp_for_level(level: int) -> int:
-    return 25 * level * (level - 1)
+    # Preserve all historic thresholds (1–20); gradual linear increments thereafter.
+    if level <= 20:
+        return 25 * level * (level - 1)
+    extra = level - 20
+    return 9500 + 1000 * extra + 10 * extra * (extra - 1)
 
 
 def level_for(xp: int) -> int:

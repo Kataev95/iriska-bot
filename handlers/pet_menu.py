@@ -69,7 +69,7 @@ from pet_care import (
     stats_lines,
     worn_line,
 )
-from pet_game import PROFESSIONS, growth_days, level_for, next_level_xp
+from pet_game import MAX_LEVEL, PROFESSIONS, growth_days, level_for, next_level_xp
 from pets import next_stage, pet_name, pet_title, species_by_code, stage_line
 from texts import days, fmt, iriski
 
@@ -308,7 +308,7 @@ def rich_pet_html(pet, names: dict, config: Config, note: str | None = None) -> 
         next_xp = next_level_xp(xp)
         progress = "🏆 Макс." if next_xp is None else f"до следующего {next_xp-xp} XP"
         doc.extend([
-            f"<p>⭐ <b>Уровень {level}/20</b> · {xp} XP · {progress}</p>",
+            f"<p>⭐ <b>Уровень {level}/{MAX_LEVEL}</b> · {xp} XP · {progress}</p>",
             f"<p>🍖 {int(pet['food'])}%   😊 {int(pet['joy'])}%   ⚡ {int(pet['energy'])}%</p>",
             f"<p>🔥 <b>{streak} {days(streak)}</b> · {stage_line(growth_days(pet))}</p>",
         ])
@@ -496,7 +496,7 @@ def card_caption(pet, names: dict, config: Config, viewer: int | None = None,
         xp = int(pet["xp"])
         level = level_for(xp)
         target = next_level_xp(xp)
-        lines.append(f"⭐ Уровень {level}/20 • {xp} XP")
+        lines.append(f"⭐ Уровень {level}/{MAX_LEVEL} • {xp} XP")
         lines.append(f"До уровня {level + 1}: {target - xp} XP" if target else "🏆 Максимальный уровень")
         lines.append("🧭 Приключения дают опыт и ириски. Прогресс не сгорает.")
         lines.append("")
@@ -727,7 +727,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         xp = int(pet["xp"])
         lvl = level_for(xp)
         text = (
-            f"🐾 <b>{pet_title(pet)}</b> · ⭐ уровень {lvl}/20\n"
+            f"🐾 <b>{pet_title(pet)}</b> · ⭐ уровень {lvl}/{MAX_LEVEL}\n"
             f"🔥 {int(pet['streak'])} {days(int(pet['streak']))} · {xp} XP\n"
             f"👫 {_plain(names, pet['user_a'])} и {_plain(names, pet['user_b'])}\n"
             "🎮 Кормление, задания, походы, развитие и магазин — в Mini App."
@@ -738,7 +738,7 @@ async def send_card(message: Message, db: Database, config: Config, pet=None) ->
         await reply_rich(
             message, text, html=(
                 f"<h2>🐾 {pet_title(pet)}</h2>"
-                f"<p>⭐ Уровень {lvl}/20 · {xp} XP · "
+                f"<p>⭐ Уровень {lvl}/{MAX_LEVEL} · {xp} XP · "
                 f"🔥 {int(pet['streak'])} {days(int(pet['streak']))}</p>"
                 "<p>🎮 Все игровые действия — в Mini App.</p>"
             ), reply_markup=markup,

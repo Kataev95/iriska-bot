@@ -57,7 +57,7 @@
     }).join("")+'</div>';
     return head+(!p.best_streak?'<div class="notice">Ферма станет доступна после вылупления питомца.</div>':"")+seeds+plots+
       stockList(p,c,"crop")+upgrade(p,c,"land","🧱 Расширение","Больше грядок: "+c.plot_counts.join(" → "))+
-      upgrade(p,c,"tool","💧 Лейка","Полив один раз за посадку сокращает исходное время роста на "+c.water_percent[s.levels.tool-1]+"%.")+
+      upgrade(p,c,"tool","💧 Лейка","Полив один раз за посадку сокращает исходное время роста на "+(c.water_percent[s.levels.tool-1]+(p.progression?.effects.water_bonus||0))+"% с учётом навыков.")+
       '<p class="notice">Урожай не портится. Семена стоят ириски, прибыль зависит от продаж и лимита. Вы можете собирать урожай вместе.</p>'+
       button("← Назад к карте",'data-click="country-back"',false,"btn-quiet");
   }

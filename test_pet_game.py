@@ -39,6 +39,73 @@ class GameTests(unittest.IsolatedAsyncioTestCase):
         await db.commit()
         return cur.lastrowid
 
+    async def test_extended_levels_and_passive_effects(self):
+        from pet_game import MAX_LEVEL, xp_for_level, next_level_xp
+        from pet_progression import effects, skill_points
+        self.assertEqual(MAX_LEVEL,100)
+        for level in range(1,21):
+            self.assertEqual(xp_for_level(level),25*level*(level-1))
+        for level in range(2,101):
+            threshold=xp_for_level(level)
+            self.assertEqual(level_for(threshold),level)
+            self.assertEqual(level_for(threshold-1),level-1)
+        self.assertEqual(level_for(legacy_xp(100)),20)
+        self.assertEqual(level_for(9999999),100)
+        self.assertIsNone(next_level_xp(xp_for_level(100)))
+        self.assertEqual(skill_points(100),20)
+        db=self.db._require()
+        await db.execute("UPDATE pets SET xp=?,profession='explorer',food=40,energy=60 WHERE id=?",
+                         (xp_for_level(35),self.pid))
+        await db.commit()
+        self.assertTrue((await self.db.learn_skill(self.pid,1,"trail",0)).startswith("✅"))
+        self.assertTrue((await self.db.learn_skill(self.pid,2,"trail",1)).startswith("✅"))
+        self.assertTrue((await self.db.learn_skill(self.pid,1,"wisdom",0)).startswith("✅"))
+        self.assertTrue((await self.db.learn_skill(self.pid,2,"care",0)).startswith("✅"))
+        self.assertTrue((await self.db.choose_specialization(self.pid,1,"wanderer")).startswith("✅"))
+        self.assertTrue((await self.db.start_trip(self.pid,1,"park",NOW,TZ)).startswith("✅"))
+        trip=await self.db.active_trip(self.pid)
+        self.assertEqual(trip["xp"],35*128//100)
+        self.assertEqual(trip["coins"],2)
+        self.assertEqual((await self.db.get_pet(self.pid))["energy"],52)
+        self.assertTrue((await self.db.game_care(self.pid,2,"feed",NOW,TZ)).startswith("✅"))
+        self.assertEqual((await self.db.get_pet(self.pid))["food"],67)
+        state=await self.db.progression_state(await self.db.get_pet(self.pid))
+        self.assertEqual(state["points"],3)
+        self.assertEqual(state["evolution"]["name"],"Герой долины")
+        await self.db.close()
+        self.db=Database(self.path)
+        await self.db.connect()
+        self.assertEqual(await self.db.progression_state(await self.db.get_pet(self.pid)),state)
+        self.assertEqual((await self.db.get_pet(self.pid))["profession"],"explorer")
+
+    async def test_new_professions_real_effects_and_skill_budget(self):
+        from pet_game import xp_for_level
+        db=self.db._require()
+        await db.execute("UPDATE pets SET xp=?,food=40 WHERE id=?",(xp_for_level(5),self.pid))
+        await db.commit()
+        self.assertTrue((await self.db.choose_profession(self.pid,1,"guardian")).startswith("✅"))
+        self.assertTrue((await self.db.learn_skill(self.pid,1,"care",0)).startswith("✅"))
+        self.assertFalse((await self.db.learn_skill(self.pid,2,"trail",0)).startswith("✅"))
+        self.assertTrue((await self.db.game_care(self.pid,1,"feed",NOW,TZ)).startswith("✅"))
+        self.assertEqual((await self.db.get_pet(self.pid))["food"],77)
+        await db.execute("UPDATE pets SET profession='gardener',xp=? WHERE id=?",(xp_for_level(25),self.pid))
+        await db.commit()
+        self.assertTrue((await self.db.learn_skill(self.pid,1,"craft",0)).startswith("✅"))
+        self.assertTrue((await self.db.learn_skill(self.pid,1,"craft",1)).startswith("✅"))
+        self.assertTrue((await self.db.learn_skill(self.pid,1,"garden",0)).startswith("✅"))
+        self.assertTrue((await self.db.farm_action(self.pid,1,"plant","wheat",1,0,NOW,TZ)).startswith("✅"))
+        self.assertTrue((await self.db.farm_action(self.pid,2,"water","",1,1,NOW,TZ)).startswith("✅"))
+        state=await self.db.countryside_state(self.pid,datetime.fromtimestamp(NOW,TZ).date().isoformat())
+        self.assertEqual(state["plots"][0]["ready_at"],NOW+300*(1-.37))
+        await db.execute("UPDATE pets SET profession='engineer' WHERE id=?",(self.pid,))
+        await db.executemany("INSERT INTO pet_materials VALUES(?,?,?)",
+                             [(self.pid,"wood",100),(self.pid,"leaf",100),(self.pid,"stone",100)])
+        await db.commit()
+        self.assertTrue((await self.db.build_business(self.pid,1,"florist",NOW,0)).startswith("✅"))
+        self.assertTrue((await self.db.start_business_job(self.pid,1,"florist",NOW,TZ)).startswith("✅"))
+        business=await self.db.business_state(self.pid,datetime.fromtimestamp(NOW,TZ).date().isoformat())
+        self.assertEqual(business["units"]["florist"]["job"]["finish_at"],NOW+900*86//100)
+
     async def test_purchase_race_and_failure_rollback(self):
         results = await asyncio.gather(
             *(self.db.game_buy(self.pid, u, "house", NOW, TZ) for u in (1, 2))
