@@ -739,6 +739,7 @@ async function loadPet(id) {
 async function refreshPet({force=false,quiet=true} = {}) {
   if (!ui.selected || !TG?.initData || ui.busy || ui.syncing || motionHidden() ||
       !modal.classList.contains("hidden")) return;
+  if(!force&&ui.tab==="arcade"&&ui.pet?.arcade?.active?.mine&&serverNow()<=ui.pet.arcade.active.expires_at)return;
   if (!force && Date.now()-ui.lastSync < 55000) return;
   const id = ui.selected, serial = ++ui.syncSerial;
   ui.syncing = true;
@@ -1099,6 +1100,7 @@ async function performArcade(action,game="",move=null){
   }
   ui.busy=true;++ui.syncSerial;app.classList.add("is-busy");
   const before=ui.pet;
+  let refresh=false;
   try{
     const result=await api("/api/arcade/action",payload);
     if(ui.selected!==id)return;
@@ -1111,9 +1113,14 @@ async function performArcade(action,game="",move=null){
     }else{
       ui.pet={...ui.pet,arcade:result.arcade};render();
     }
-    showToast(result.message);
-  }catch(e){showToast(e.message);}
-  finally{ui.busy=false;app.classList.remove("is-busy");syncArcade();}
+    const feedback=app.querySelector("[data-arcade-feedback]");
+    if(action==="move"&&feedback&&!result.pet)feedback.textContent=result.message;
+    else showToast(result.message);
+  }catch(e){refresh=true;showToast(e.message);}
+  finally{
+    ui.busy=false;app.classList.remove("is-busy");syncArcade();
+    if(refresh)refreshArcade();
+  }
 }
 
 async function perform(kind, code="", extra={}) {
