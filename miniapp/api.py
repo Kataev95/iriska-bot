@@ -158,6 +158,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "level_start_xp": xp_for_level(level_for(current_xp)),
         "next_xp": next_xp,
         "server_time": now,
+        "world_hour": hour,  # Cosmetic sky follows the same BOT_TZ as the game.
         "mood": mood_text(pet["food"], pet["joy"], pet["energy"], hour),
         "care_state": care_state,
         "trips_remaining": max(0, DAILY_START_LIMIT - int(trip_count)),
@@ -186,6 +187,7 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         } if trip else None,
         "today_fed": pet["last_fed_day"] == day,
         "user_cared": pet["a_day" if user_id == pet["user_a"] else "b_day"] == day,
+        "partner_wrote_today": pet["b_day" if user_id == pet["user_a"] else "a_day"] == day,
     }
 
 
