@@ -400,6 +400,148 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"pet_id":1,"kind":"business_sell","code":"florist"})
         self.assertEqual(unauth.status,401)
 
+    async def test_arcade_http_session_auth_and_score(self):
+        partner={"X-Telegram-Init-Data":signed(102)}
+        stranger={"X-Telegram-Init-Data":signed(201)}
+        async def act(action,headers=None,**extra):
+            r=await self.client.post("/api/arcade/action",headers=headers or self.headers,
+                json={"pet_id":1,"action":action,**extra})
+            self.assertEqual(r.status,200)
+            return await r.json()
+        config=await (await self.client.get("/api/bootstrap",headers=self.headers)).json()
+        self.assertEqual(len(config["arcade"]["games"]),4)
+        self.assertEqual(config["arcade"]["rewards"],3)
+        for headers,status in (({},401),(stranger,403),(partner,200)):
+            response=await self.client.get("/api/arcade/1",headers=headers)
+            self.assertEqual(response.status,status)
+        denied=await self.client.post("/api/arcade/action",headers=stranger,
+            json={"pet_id":1,"action":"start","game":"memory","expected_last":0})
+        self.assertEqual(denied.status,403)
+        denied=await self.client.post("/api/arcade/action",
+            json={"pet_id":1,"action":"start","game":"memory","expected_last":0})
+        self.assertEqual(denied.status,401)
+        start=await act("start",game="memory",expected_last=0,score=100,xp=999)
+        run=start["arcade"]["active"]
+        self.assertEqual(run["game"],"memory")
+        self.assertEqual(start["arcade"]["records"]["memory"]["remaining"],3)
+        sequence=run["state"]["sequence"]
+        self.assertEqual(len(sequence),6)
+        hidden=await (await self.client.get("/api/arcade/1",headers=partner)).json()
+        self.assertFalse(hidden["arcade"]["active"]["mine"])
+        self.assertIsNone(hidden["arcade"]["active"]["state"])
+        rejected=await act("move",headers=partner,run_id=run["id"],version=0,move=sequence[0])
+        self.assertIn("второму",rejected["message"])
+        replay=await act("start",game="catch",expected_last=0)
+        self.assertIn("изменилась",replay["message"])
+        early=await act("move",run_id=run["id"],version=0,move=sequence[0])
+        self.assertIn("Сначала",early["message"])
+        db=self.db._require()
+        stored=await (await db.execute("SELECT state FROM pet_arcade_runs WHERE id=?",(run["id"],))).fetchone()
+        data=json.loads(stored["state"]);data["reveal_until"]=time.time()-1
+        await db.execute("UPDATE pet_arcade_runs SET state=? WHERE id=?",(json.dumps(data),run["id"]))
+        await db.commit()
+        state=await (await self.client.get("/api/arcade/1",headers=self.headers)).json()
+        self.assertNotIn("sequence",state["arcade"]["active"]["state"])
+        forged=await act("move",run_id=run["id"],version=0,move=True)
+        self.assertEqual(forged["arcade"]["active"]["version"],0)
+        results=await asyncio.gather(
+            act("move",run_id=run["id"],version=0,move=sequence[0]),
+            act("move",run_id=run["id"],version=0,move=sequence[0]))
+        self.assertEqual(sum(r["message"]=="Верно!" for r in results),1)
+        before=(await self.db.get_pet(1))["xp"]
+        for version in range(1,6):
+            result=await act("move",run_id=run["id"],version=version,move=sequence[version],score=99999,xp=99999)
+        self.assertEqual(result["arcade"]["result"]["score"],100)
+        self.assertEqual(result["arcade"]["result"]["xp"],20)
+        self.assertEqual(result["pet"]["xp"],before+20)
+        self.assertEqual(result["pet"]["balance"],20)
+        self.assertEqual(result["arcade"]["records"]["memory"]["today"],100)
+        self.assertEqual(result["arcade"]["records"]["memory"]["best"],100)
+        self.assertEqual(result["arcade"]["rewards_remaining"],2)
+        repeated=await act("move",run_id=run["id"],version=5,move=sequence[5])
+        self.assertNotIn("pet",repeated)
+        self.assertEqual((await self.db.get_pet(1))["xp"],before+20)
+        other=await (await self.client.get("/api/arcade/1",headers=partner)).json()
+        self.assertEqual(other["arcade"]["records"]["memory"]["best"],100)
+
+    async def test_arcade_all_games_limits_and_persistence(self):
+        from pet_arcade import new_game, advance, DIRECTIONS, shortest_path
+        tz=self.config.tz
+        now=time.time()
+        before=(await self.db.get_pet(1))["xp"]
+        last=0
+        async def start(game,at):
+            nonlocal last
+            result=await self.db.arcade_action(1,101,"start",game,{"expected_last":last},at,tz)
+            self.assertTrue(result["message"].startswith("✅"),result)
+            last=result["arcade"]["last_id"]
+            return result["arcade"]["active"]
+        async def move(run,choice,at):
+            return await self.db.arcade_action(1,101,"move","",{"run_id":run["id"],"version":run["version"],"move":choice},at,tz)
+        # Catch: server clock, not a forged client duration, controls five rounds.
+        run=await start("catch",now)
+        early=await move(run,run["state"]["lane"],now)
+        self.assertEqual(early["arcade"]["active"]["version"],0)
+        for _ in range(5):
+            result=await move(run,run["state"]["lane"],run["state"]["ready"]+.1)
+            run=result["arcade"]["active"]
+        self.assertEqual(result["arcade"]["result"]["score"],100)
+        # Maze: traverse the actual generated grid, and test wall rejection.
+        run=await start("maze",now+30)
+        grid=run["state"]["grid"]
+        self.assertEqual(run["state"]["optimal"],shortest_path(grid))
+        wrong=await move(run,"up",now+30)
+        self.assertEqual(wrong["arcade"]["active"]["version"],0)
+        queue=[(1,1,[])];seen={(1,1)}
+        path=None
+        for r,c,moves in queue:
+            if (r,c)==(5,5):
+                path=moves;break
+            for key,(dr,dc) in DIRECTIONS.items():
+                nr,nc=r+dr,c+dc
+                if grid[nr][nc]=="." and (nr,nc) not in seen:
+                    seen.add((nr,nc));queue.append((nr,nc,moves+[key]))
+        self.assertIsNotNone(path)
+        for key in path:
+            result=await move(run,key,now+31)
+            run=result["arcade"]["active"]
+        self.assertEqual(result["arcade"]["result"]["score"],100)
+        # Reaction: exact timing is verified by server. Third rewarded game.
+        run=await start("reaction",now+60)
+        for _ in range(3):
+            result=await move(run,"tap",run["state"]["ready"]+.1)
+            run=result["arcade"]["active"]
+        self.assertGreaterEqual(result["arcade"]["result"]["score"],60)
+        self.assertEqual(result["arcade"]["rewards_remaining"],0)
+        self.assertEqual((await self.db.get_pet(1))["xp"],before+60)
+        # Fourth good result still records the score but awards no XP.
+        run=await start("memory",now+90)
+        sequence=run["state"]["sequence"]
+        for key in sequence:
+            result=await move(run,key,now+96)
+            run=result["arcade"]["active"]
+        self.assertEqual(result["arcade"]["result"]["score"],100)
+        self.assertEqual(result["arcade"]["result"]["xp"],0)
+        self.assertEqual((await self.db.get_pet(1))["xp"],before+60)
+        # Cancel and expire consume attempts. Daily quota resets without losing record.
+        for i in range(3):
+            run=await start("catch",now+240+i*150)
+            if i<2:
+                await self.db.arcade_action(1,101,"cancel","",{"run_id":run["id"],"version":0},now+241+i*150,tz)
+        denied=await self.db.arcade_action(1,101,"start","catch",{"expected_last":last},now+1000,tz)
+        self.assertIn("закончились",denied["message"])
+        tomorrow=await self.db.arcade_state(1,102,now+86400,tz)
+        self.assertEqual(tomorrow["records"]["catch"]["remaining"],4)
+        self.assertEqual(tomorrow["records"]["catch"]["best"],100)
+        self.assertIsNone(tomorrow["records"]["catch"]["today"])
+        self.assertEqual(tomorrow["rewards_remaining"],3)
+        self.assertIsNone(tomorrow["active"])
+        self.assertEqual((await self.db.get_user(CHAT_ID,101))["balance"],20)
+        # Re-run the migration on a populated database: history survives.
+        await self.db._migrate_arcade()
+        again=await self.db.arcade_state(1,101,now+86400,tz)
+        self.assertEqual(again,tomorrow)
+
     async def test_countryside_farm_and_fishing_shared_economy(self):
         from unittest.mock import patch
         from pet_countryside import CROPS
@@ -900,16 +1042,18 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=2", html)
-        self.assertIn("/static/app.js?v=18", html)
-        self.assertIn("/static/world-map.js?v=2", html)
+        self.assertIn("/static/app.js?v=19", html)
+        self.assertIn("/static/world-map.js?v=3", html)
+        self.assertIn("/static/arcade.js?v=1", html)
+        self.assertIn("/static/arcade.css?v=1", html)
         self.assertIn("/static/countryside.js?v=1", html)
         self.assertIn("/static/countryside.css?v=1", html)
         self.assertIn("/static/world-map.css?v=1", html)
         self.assertIn("/static/pet-life.js?v=1", html)
         self.assertIn("/static/pet-life.css?v=1", html)
-        self.assertIn("/static/world-ui.js?v=1", html)
+        self.assertIn("/static/world-ui.js?v=2", html)
         self.assertIn("/static/world.css?v=1", html)
-        self.assertIn("/static/navigation.js?v=2", html)
+        self.assertIn("/static/navigation.js?v=3", html)
         self.assertIn("/static/studio.js?v=3", html)
         self.assertIn("/static/studio.css?v=2", html)
         self.assertIn("/static/season.js?v=1", html)
@@ -1201,6 +1345,8 @@ const p={id:1,best_streak:2,house:true,world_hour:12,chapter:{stage:3},
   businesses:{units:{florist:{level:1,stock:2,order_done:false},carpenter:{level:1,stock:0,job:{finish_at:120}}},sales_coins_remaining:12}};
 const c={businesses:[{code:"florist",sell_price:2},{code:"carpenter",sell_price:3}],tycoon_rules:{order_quantity:2}};
 assert.equal(m.places.length,9);
+assert.equal(m.get("arcade").route,"arcade");
+assert.equal(m.places.filter(p=>p.route).length,9);
 assert.equal(new Set(m.places.map(x=>x.id)).size,9);
 assert.equal(m.valid("__proto__"),false);
 assert.equal(m.valid("unknown"),false);
@@ -1269,6 +1415,43 @@ assert.match(c.fishing(p,cfg,30),/data-fish-reel="1" disabled/);
         cp=subprocess.run(["node","-e",code,str(script)],capture_output=True,text=True,timeout=15,check=False)
         self.assertEqual(cp.returncode,0,cp.stderr)
 
+    def test_arcade_frontend_timing_and_render(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static=Path(__file__).resolve().parent/"miniapp"/"static"
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script=static/"arcade.js"
+        code="""
+const assert=require("node:assert/strict"), a=require(process.argv[1]);
+const games=["catch","memory","maze","reaction"].map(code=>({code,name:code,icon:"🎮",description:"Игра"}));
+const cfg={games,attempts:4,rewards:3,reward_xp:20,reward_score:60,max_moves:48,symbols:["🍎","🍀","⭐","💎"]};
+const p={best_streak:2,arcade:{records:Object.fromEntries(games.map(g=>[g.code,{remaining:4,today:null,best:null}])),rewards_remaining:3,last_id:0,active:null}};
+assert.equal((a.render(p,cfg,100).match(/data-arcade-start=/g)||[]).length,4);
+const catchRun={id:1,mine:true,game:"catch",expires_at:120,state:{round:0,points:0,lane:1,start:100,ready:101.4,until:104.4}};
+assert.equal(a.phase(catchRun,101),"waiting");
+assert.equal(a.phase(catchRun,102),"ready");
+assert.equal(a.phase(catchRun,105),"late");
+assert.equal(a.phase(catchRun,121),"expired");
+p.arcade.active=catchRun;
+assert.match(a.render(p,cfg,102),/Лови сейчас/);
+assert.match(a.render(p,cfg,105),/Следующий раунд/);
+p.arcade.active={...catchRun,game:"memory",state:{round:0,sequence:[0,1,2,3,0,1],reveal_until:105}};
+assert.match(a.render(p,cfg,104),/Запомни порядок/);
+assert.match(a.render(p,cfg,106),/<span>\?<\/span>/);
+p.arcade.active={...catchRun,game:"reaction"};
+assert.match(a.render(p,cfg,102),/signal-ready/);
+p.arcade.active={...catchRun,mine:false,state:null};
+assert.match(a.render(p,cfg,102),/Второй владелец/);
+assert.doesNotMatch(a.render(p,cfg,102),/data-arcade-move=/);
+p.arcade.active={...catchRun,game:"maze",state:{grid:["#######","#.....#","#.###.#","#.#...#","#.#.###","#.....#","#######"],row:1,col:1,moves:0,optimal:8}};
+assert.equal((a.render(p,cfg,102).match(/class="maze-cell/g)||[]).length,49);
+assert.match(a.render(p,cfg,102),/data-arcade-move="up" disabled/);
+"""
+        cp=subprocess.run(["node","-e",code,str(script)],capture_output=True,text=True,timeout=15,check=False)
+        self.assertEqual(cp.returncode,0,cp.stderr)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -1276,7 +1459,7 @@ assert.match(c.fishing(p,cfg,30),/data-fish-reel="1" disabled/);
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("countryside.js", "world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("arcade.js", "countryside.js", "world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
