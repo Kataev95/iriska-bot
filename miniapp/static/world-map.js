@@ -10,7 +10,7 @@
     {id:"club",name:"Клуб",route:"club",icon:"🏆",description:"Лига питомцев, сезоны, испытания и награды."},
     {id:"business",name:"Tycoon",route:"business",icon:"🏭",description:"Ручное производство, оборудование, работники и заказы."},
     {id:"shop",name:"Магазин",route:"shop",icon:"🛍️",description:"Еда, аксессуары и улучшения за ириски."},
-    {id:"market",name:"Рынок",route:"market",icon:"🏪",description:"Обменивайтесь ресурсами и товарами с игроками своего чата."},
+    {id:"market",name:"Рынок",route:"market",icon:"🏪",description:"Покупайте и продавайте ресурсы и товары с игроками своего чата."},
     {id:"arcade",name:"Аркады",kind:"future",icon:"🎮",description:"Короткие мини-игры для питомцев.",stage:"Будущий этап · аркадные игры"}
   ].map(Object.freeze));
   const get=id=>places.find(x=>x.id===id)||places.find(x=>x.id==="house");
@@ -99,7 +99,7 @@
       '<div><div class="eyebrow">'+(place.kind==="future"?"В РАЗРАБОТКЕ":"ЛОКАЦИЯ")+'</div><h2>'+place.name+'</h2>'+
       '<p>'+esc(place.description)+'</p></div></div>'+
       (note?'<p class="map-detail-note">'+esc(note)+'</p>':"")+
-      (place.route?'<button type="button" class="btn btn-primary btn-wide" data-map-open="'+place.id+'">'+(s.tone==="reward"?"Перейти к награде":"Открыть локацию")+' →</button>':
+      (place.route?'<button type="button" class="btn btn-primary btn-wide" data-map-open="'+place.id+'">'+(s.text==="Заказ готов"?"Перейти к заказу":s.text==="Партия готова"?"Забрать товары":s.tone==="reward"?"Перейти к награде":"Открыть локацию")+' →</button>':
       '<div class="map-future-note">🔒 '+esc(place.stage)+'</div>')+'</section>';
   }
   const api=Object.freeze({places,get,valid,status,recommended,renderMap,renderDetail});
