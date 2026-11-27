@@ -137,6 +137,12 @@ class PetGameDatabase(PetProgressionDatabase):
         await self._migrate_studio()
 
     @asynccontextmanager
+    async def _game_read(self):
+        """Stable reads on the shared SQLite connection, without a write transaction."""
+        async with self._lock:
+            yield self._require()
+
+    @asynccontextmanager
     async def _game_transaction(self):
         async with self._lock:
             db = self._require()
@@ -161,6 +167,8 @@ class PetGameDatabase(PetProgressionDatabase):
         return pet
 
     async def _game_refresh(self, db, pet, now, tz):
+        # A queued or backwards-clock request must never rewind the decay clock.
+        now = max(now, float(pet["care_ts"] or 0))
         f, j, e = decay(
             pet["food"],
             pet["joy"],
@@ -186,6 +194,8 @@ class PetGameDatabase(PetProgressionDatabase):
             if pet is None:
                 return None
             pet = await self._game_refresh(db, pet, now, tz)
+            if not (food or joy or energy):
+                return pet
             await db.execute(
                 "UPDATE pets SET food=?,joy=?,energy=? WHERE id=?",
                 (
