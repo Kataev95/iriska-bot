@@ -31,6 +31,8 @@ from pet_market import (MAX_ACTIVE_LISTINGS_PER_PET, MAX_LISTINGS_PER_PET_DAY,
 from pets import species_by_code
 from pet_countryside import countryside_config
 from pet_arcade import arcade_config
+from pet_progression import progression_config
+from pet_game import MAX_LEVEL
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent
@@ -173,7 +175,8 @@ async def snapshot(db, cfg, user_id: int, pet_id: int):
         "image": f"/assets/pets/{current_image}.jpg",
         "portrait_reactions": portrait_reactions,
         "partner": partner_name,
-        "xp": current_xp, "level": level_for(current_xp),
+        "xp": current_xp, "level": level_for(current_xp), "max_level": MAX_LEVEL,
+        "progression": await db.progression_state(pet),
         "level_start_xp": xp_for_level(level_for(current_xp)),
         "next_xp": next_xp,
         "server_time": now,
@@ -304,6 +307,7 @@ async def bootstrap(request: web.Request):
         },
         "countryside": countryside_config(),
         "arcade": arcade_config(),
+        "progression": progression_config(),
         "market_rules": {
             "active_max": MAX_ACTIVE_LISTINGS_PER_PET,
             "posts_per_day": MAX_LISTINGS_PER_PET_DAY,
@@ -468,6 +472,12 @@ async def action(request: web.Request):
             pet_id, uid, code, now, cfg.tz, order=kind == "tycoon_order",
             expected_stock=payload.get("expected_stock"),
         )
+    elif kind == "skill_learn":
+        result = await db.learn_skill(pet_id, uid, code, payload.get("expected_rank"))
+    elif kind == "specialization":
+        result = await db.choose_specialization(pet_id, uid, code)
+    elif kind == "level_claim":
+        result = await db.claim_level_milestone(pet_id, uid, payload.get("level"), now)
     elif kind == "country_upgrade":
         result = await db.country_upgrade(pet_id, uid, code, payload.get("expected_level"))
     elif kind in ("farm_plant", "farm_water", "farm_harvest"):
