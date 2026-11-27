@@ -27,18 +27,15 @@ syncSafeArea();
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
              group: "food", busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
-             returnTab: "home", studioFrom:"home", studioMode:"frames",
+             studioMode:"frames",
              studio:null, studioLoading:false, studioFetchedAt:0, studioRequest:0,
-             seasonFrom:"home", season:null, seasonLoading:false,
+             season:null, seasonLoading:false,
              seasonFetchedAt:0, seasonRequest:0,
              league: null, leagueLoading:false, leagueFetchedAt:0, leagueRequest:0,
              market: null, marketLoading:false, marketFetchedAt:0,
              marketRequest:0, marketSelection:{kind:"material",code:"leaf",quantity:1,price:2} };
-const tabs = [
-  ["home","🏠","Главная"], ["trips","🧭","Походы"],
-  ["tasks","📋","Задания"], ["shop","🛍","Магазин"],
-  ["growth","⭐","Развитие"],
-];
+const navigation = window.PetsNavigation.create();
+const tabs = window.PetsNavigation.tabs;
 const emoji = {food:"🍪",wear:"🎀",freeze:"🧊",house:"🏠"};
 const resourceQuantity = (p, code) => Math.max(0,Number(p.materials?.[code] || 0));
 const safe = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
@@ -279,7 +276,7 @@ function weeklyChapter(p) {
       ? '<p class="subtitle" data-chapter-countdown>⏳ '+duration(left)+' до возвращения</p>'
       : '<button class="btn btn-primary" data-action="claim" data-trip="'+trip.id+'">Забрать добычу</button>';
   } else if (trip) {
-    action = '<button class="btn btn-quiet" data-tab="trips">Открыть текущий поход</button>';
+    action = '<p class="subtitle">Сначала завершите текущий поход ниже.</p>';
   } else if (!p.best_streak) {
     action = '<p class="subtitle">Приключение откроется, когда питомец вылупится.</p>';
   } else {
@@ -312,45 +309,65 @@ function home(p) {
       (disabled?'disabled ':'')+'title="'+safe(state.blocked_reason||hint)+'">'+
       '<span>'+safe(action.name)+'</span><small>'+(disabled?safe(hint):'✓ Готово')+'</small></button>';
   }).join("");
-  return weeklyChapter(p)+hero(p)+'<div class="panel"><div class="eyebrow">ЕЖЕДНЕВНЫЙ УХОД</div>'+
+  return hero(p)+'<div class="panel"><div class="eyebrow">ЕЖЕДНЕВНЫЙ УХОД</div>'+
     '<h2 class="h2">Позаботьтесь о '+safe(p.name)+'</h2>'+
     '<div class="buttons">'+actions+'</div></div>'+
     '<div class="notice">'+(p.today_fed
       ? "✅ Сегодня ваша пара уже поддержала серию!"
       : "🕊 Напишите друг другу в чате, чтобы поддержать серию общения.")+'</div>'+
-    '<div class="panel studio-link"><div class="row"><div><div class="h2">🎨 Студия и альбом</div>'+
-    '<p class="subtitle">Рамки, значки и история ваших приключений</p></div>'+
-    '<button class="btn btn-primary" data-click="studio">Открыть →</button></div></div>'+
-    '<div class="panel"><div class="row"><strong>🎀 Гардероб</strong>'+
-    '<button class="btn btn-quiet" data-click="wardrobe">Открыть →</button></div>'+
-    '<p class="subtitle">'+p.items.length+' вещей · '+p.worn.length+' надето'+
-    (p.house ? ' · 🏠 Домик' : '')+'</p></div>'+
-    '<div class="panel home-link"><div class="row"><div><div class="h2">🏡 Дом '+safe(p.name)+'</div>'+
-    '<p class="subtitle">'+(p.house
-      ? 'Улучшено '+Object.values(p.house_rooms||{}).reduce((sum,n)=>sum+n,0)+' / 6 уровней комнат'
-      : 'Постройте свой уютный домик')+'</p></div>'+
-    '<button class="btn btn-primary" data-click="house">Открыть →</button></div></div>'+
-    '<div class="panel business-link"><div class="row"><div><div class="h2">🏪 Семейные бизнесы</div>'+
-    '<p class="subtitle">'+(p.businesses?.starts_remaining ?? 4)+' производства осталось сегодня · '+
-    '🍬 '+(p.businesses?.sales_coins_remaining ?? 12)+' к продаже</p></div>'+
-    '<button class="btn btn-primary" data-click="business">Открыть →</button></div></div>'+
-    '<div class="panel season-link"><div class="row"><div><div class="h2">🎟 Сезонные испытания</div>'+
-    '<p class="subtitle">Проходите испытания вдвоём и собирайте коллекцию титулов</p></div>'+
-    '<button class="btn btn-primary" data-click="season">Играть →</button></div></div>'+
-    '<div class="panel league-link"><div class="row"><div><div class="h2">🏆 Лига питомцев</div>'+
-    '<p class="subtitle">Достижения и еженедельный рейтинг вашего чата</p></div>'+
-    '<button class="btn btn-primary" data-click="league">Открыть →</button></div></div>'+
-    '<div class="panel market-link"><div class="row"><div><div class="h2">🛒 Рынок питомцев</div>'+
-    '<p class="subtitle">Покупайте и продавайте предметы в вашем Telegram-чате</p></div>'+
-    '<button class="btn btn-primary" data-click="market">Открыть →</button></div></div>'+
-    '<div class="panel backpack-link"><div class="row"><div><div class="h2">🎒 Общий рюкзак</div>'+
-    '<p class="subtitle">'+(p.crafts||[]).length+' сувениров · '+
-    ui.config.materials.reduce((sum,m)=>sum+resourceQuantity(p,m.code),0)+' материалов</p></div>'+
-    '<button class="btn btn-primary" data-click="inventory">Открыть →</button></div>'+
-    ((p.crafts||[]).length ?
-      '<div class="trophy-strip">'+ui.config.recipes.filter(r=>p.crafts.includes(r.code))
-        .map(r=>'<span class="chip chip-purple">'+safe(r.icon)+' '+safe(r.name)+'</span>').join('')+'</div>' : '')+
+    '<div class="home-shortcuts">'+
+    hubCard("tasks","📋","Задания дня",p.daily.filter(t=>t.done&&!t.claimed).length
+      ? "Есть награды к получению" : "Три совместных задания")+
+    hubCard("profile","✨","Профиль","Развитие, внешний вид и альбом")+
+    ((p.trip || (p.chapter && p.chapter.stage<3))
+      ? hubCard("trips","🧭","Приключения",p.trip
+        ? (p.trip.finish_at<=serverNow()?"Награда ждёт вас":"Питомец в пути")
+        : "Продолжить лесную тропу") : "")+
     '</div>';
+}
+function hubCard(route, icon, title, detail) {
+  return '<button type="button" class="hub-card" data-tab="'+safe(route)+'">'+
+    '<span class="hub-icon" aria-hidden="true">'+safe(icon)+'</span>'+
+    '<span class="hub-copy"><strong>'+safe(title)+'</strong><small>'+safe(detail)+'</small></span>'+
+    '<span class="hub-arrow" aria-hidden="true">›</span></button>';
+}
+function hub(title, description, cards) {
+  return '<div class="section-heading">'+safe(title)+'</div><p class="section-lead">'+
+    safe(description)+'</p><div class="hub-list">'+cards.join("")+'</div>';
+}
+function profile(p) {
+  return hub("✨ Профиль питомца","Всё о вашем общем питомце",[
+    hubCard("growth","⭐","Развитие","Уровень "+p.level+" · профессия и серия"),
+    hubCard("wardrobe","🎀","Гардероб","Аксессуары · "+p.items.length+" вещей"),
+    hubCard("studio","🎨","Студия и альбом","Рамки, значки и история")
+  ]);
+}
+function world(p) {
+  return hub("🌍 Мир питомца","Ваши места и совместные приключения",[
+    hubCard("house","🏡","Домик",p.house?"Комнаты и улучшения":"Постройте свой дом"),
+    hubCard("trips","🧭","Приключения",p.trip?"Текущий поход и награды":"Маршруты и лесная тропа")
+  ]);
+}
+function games(p) {
+  return hub("🎮 Игры","Развивайтесь вместе и выполняйте задания",[
+    hubCard("business","🏪","Семейные предприятия","Производство, улучшения и продажа товаров"),
+    hubCard("tasks","📋","Задания дня",p.daily.filter(t=>t.claimed).length+" / "+p.daily.length+" наград получено")
+  ]);
+}
+function trade(p) {
+  return hub("🛒 Торговля","Покупки и обмен в вашем чате",[
+    hubCard("shop","🛍","Магазин","Еда, аксессуары и улучшения"),
+    hubCard("market","🏪","Рынок","Предложения игроков и ваши объявления")
+  ]);
+}
+function club(p) {
+  return hub("🏆 Клуб","Коллекции и соревнования питомцев",[
+    hubCard("league","🏅","Лига","Достижения и рейтинг недели"),
+    hubCard("season","🎟","Сезон","Испытания, титулы и рейтинг сезона")
+  ]);
+}
+function quickAccess() {
+  return '<div class="quick-access"><button type="button" class="btn btn-quiet" data-tab="inventory">🎒 Рюкзак</button></div>';
 }
 function routeLoot(route, p) {
   if (!route) return '<span class="muted">Нет данных</span>';
@@ -361,6 +378,9 @@ function routeLoot(route, p) {
   ).join("");
 }
 function trips(p) {
+  return weeklyChapter(p)+tripRoutes(p);
+}
+function tripRoutes(p) {
   if (p.trip) {
     const r = ui.config.routes.find(x => x.code === p.trip.route);
     const left = Math.max(0,p.trip.finish_at-serverNow());
@@ -373,7 +393,9 @@ function trips(p) {
       '<div class="route-info"><span class="chip">⭐ '+p.trip.xp+' XP</span><span class="chip">🍬 '+p.trip.coins+'</span></div>'+
       '<p class="route-loot-title">🎒 Материалы после возвращения</p>'+
       '<div class="route-loot">'+routeLoot(r,p)+'</div>'+
-      (left ? '<button class="btn btn-wide" data-click="refresh">🔄 Обновить</button>' :
+      (p.chapter?.trip_id===p.trip.id
+        ? '<p class="subtitle">Награда этого похода доступна в карточке главы выше.</p>'
+        : left ? '<button class="btn btn-wide" data-click="refresh">🔄 Обновить</button>' :
         '<button class="btn btn-primary btn-wide" data-action="claim" data-trip="'+p.trip.id+'">🎁 Забрать награду</button>')+
       '</div>';
   }
@@ -451,12 +473,7 @@ function growth(p) {
       ui.config.professions.map(job=>'<div class="card-row" style="margin-top:14px">'+
         '<div class="card-text"><strong>'+safe(job.name)+'</strong><small>'+safe(job.effect)+'</small></div>'+
         '<button class="btn btn-primary" data-profession="'+safe(job.code)+'">Выбрать</button></div>').join("")
-    )+'</div><button class="btn btn-wide" data-click="wardrobe">🎀 Гардероб →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="inventory">🎒 Рюкзак и мастерская →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="house">🏡 Мой дом →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Бизнесы и производство →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="market">🛒 Рынок и торговля →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="league">🏆 Достижения и рейтинги →</button>';
+    )+'</div>';
 }
 function inventory(p) {
   const stock = p.materials || {};
@@ -499,12 +516,8 @@ function inventory(p) {
     '<h2 class="h2 inventory-heading">🛠 Мастерская</h2>'+
     '<p class="section-lead">Создавайте коллекционные сувениры из найденных вещей. '+
       'Пока они не дают бонусов к XP или ирискам.</p>'+recipes+
-    '<button class="btn btn-quiet btn-wide" data-click="business">🏪 Предприятия и товары →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="market">🛒 Торговая площадка →</button>'+
-    '<button class="btn btn-quiet btn-wide" data-click="league">🏆 Лига питомцев →</button>'+
     '<button class="btn btn-quiet btn-wide" data-click="inventory-back">← Назад</button>';
 }
-
 
 function wardrobe(p) {
   return '<div class="section-heading">🎀 Гардероб</div>'+
@@ -517,7 +530,7 @@ function wardrobe(p) {
         '<button class="btn" data-action="wear" data-code="'+safe(code)+'">'+
         (p.worn.includes(code)?'Снять':'Надеть')+'</button></div></div>';
     }).join(""):'<div class="panel">Пока нет вещей. Загляни в магазин!</div>')+
-    '<button class="btn btn-wide btn-quiet" data-tab="home">← К питомцу</button>';
+    '<button class="btn btn-wide btn-quiet" data-click="wardrobe-back">← Назад</button>';
 }
 function render() {
   if (!ui.pet) return;
@@ -525,9 +538,10 @@ function render() {
   wallet.innerHTML='🍬 <b>'+p.balance+'</b>';
   nav.classList.remove("hidden");
   nav.innerHTML=tabs.map(([id,icon,label])=>'<button class="nav-btn '+
-    (ui.tab===id || ['wardrobe','inventory','house','business','market','league'].includes(ui.tab)&&ui.returnTab===id?'active':'')+'" data-tab="'+id+'"><span>'+icon+'</span>'+label+'</button>').join("");
-  app.innerHTML=renderPicker()+({
-    home:home,trips:trips,tasks:tasks,shop:shop,growth:growth,wardrobe:wardrobe,inventory:inventory,
+    (navigation.activeRoot()===id?'active':'')+'" data-root="'+id+'"'+
+    (navigation.activeRoot()===id?' aria-current="page"':'')+'><span>'+icon+'</span>'+label+'</button>').join("");
+  app.innerHTML=renderPicker()+(ui.tab==="inventory"?"":quickAccess())+({
+    home,profile,world,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow()),
     market: p => window.PetsMarket.renderMarket(
@@ -642,13 +656,9 @@ function syncBackButton() {
     else TG?.BackButton?.hide();
   } catch {}
 }
-function goToTab(tab) {
-  if(tab==="studio" && ui.tab!=="studio") ui.studioFrom=ui.tab;
-  if(tab==="season" && ui.tab!=="season") ui.seasonFrom=ui.tab;
-  if (["wardrobe","inventory","house","business","market","league","season","studio"].includes(tab) && !["wardrobe","inventory","house","business","market","league","season","studio"].includes(ui.tab)) {
-    ui.returnTab = ui.tab;
-  }
-  ui.tab = tab;
+function displayRoute(tab) {
+  ui.tab=tab;
+  ui.picker=false;
   render();
   syncBackButton();
   window.scrollTo(0,0);
@@ -657,16 +667,17 @@ function goToTab(tab) {
   if(tab==="season") loadSeason({quiet:false});
   if(tab==="studio") loadStudio({quiet:false});
 }
+function goToTab(tab, root=false) {
+  if(ui.busy) return;
+  displayRoute(root ? navigation.select(tab) : navigation.open(tab));
+}
 function closeModal() {
   modal.classList.add("hidden");
   syncBackButton();
 }
 function goBack() {
   if (!modal.classList.contains("hidden")) closeModal();
-  else if (ui.tab==="studio") goToTab(ui.studioFrom||"home");
-  else if (ui.tab==="season") goToTab(ui.seasonFrom||"home");
-  else if (["wardrobe","inventory","house","business","market","league","season","studio"].includes(ui.tab)) goToTab(ui.returnTab || "home");
-  else if (ui.tab !== "home") goToTab("home");
+  else if (!ui.busy && ui.pet) displayRoute(navigation.back());
 }
 try {TG?.BackButton?.onClick(goBack);} catch {}
 document.addEventListener("keydown", e => {if(e.key === "Escape") goBack();});
@@ -710,13 +721,15 @@ function syncTimers() {
       if (remaining===0 && app.querySelector('[data-click="refresh"]')) render();
     }
   }
-  if (ui.tab === "home") {
+  if (ui.tab === "trips") {
     const countdown = app.querySelector("[data-chapter-countdown]");
     if (countdown && ui.pet.trip) {
       const left = ui.pet.trip.finish_at-serverNow();
       if (left<=0) render();
       else countdown.textContent = "⏳ "+duration(left)+" до возвращения";
     }
+  }
+  if (ui.tab === "home") {
     for (const btn of app.querySelectorAll('[data-action="care"]')) {
       const info = ui.pet.care_state?.[btn.dataset.code];
       if (!info) continue;
@@ -781,20 +794,21 @@ async function perform(kind, code="", extra={}) {
 }
 document.addEventListener("click", async e=>{
   const target=e.target.closest("button");if(!target) return;
+  if (target.dataset.root) {tap();goToTab(target.dataset.root,true);return;}
   if (target.dataset.tab) {tap();goToTab(target.dataset.tab);return;}
+  if (["house-back","business-back","market-back","studio-back","season-back",
+       "league-back","inventory-back","wardrobe-back"].includes(target.dataset.click)) {
+    tap();goBack();return;
+  }
   if (target.dataset.group) {ui.group=target.dataset.group;tap();render();return;}
   if (target.dataset.pet) {try{await loadPet(Number(target.dataset.pet));}catch(err){showToast(err.message);}return;}
   if (target.dataset.click==="picker") {ui.picker=!ui.picker;render();return;}
   if (target.dataset.click==="pet-greet") {petGreeting();return;}
   if (target.dataset.click==="wardrobe") {tap();goToTab("wardrobe");return;}
   if (target.dataset.click==="house") {tap();goToTab("house");return;}
-  if (target.dataset.click==="house-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.click==="business") {tap();goToTab("business");return;}
-  if (target.dataset.click==="business-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.click==="market") {tap();goToTab("market");return;}
-  if (target.dataset.click==="market-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.click==="studio") {tap();goToTab("studio");return;}
-  if (target.dataset.click==="studio-back") {tap();goToTab(ui.studioFrom||"home");return;}
   if (target.dataset.studioMode) {
     const mode=target.dataset.studioMode;
     if(["frames","stickers","album"].includes(mode)){
@@ -812,9 +826,6 @@ document.addEventListener("click", async e=>{
     return;
   }
   if (target.dataset.click==="season") {tap();goToTab("season");return;}
-  if (target.dataset.click==="season-back") {
-    tap();goToTab(ui.seasonFrom||"home");return;
-  }
   if (target.dataset.seasonRefresh) {await loadSeason({force:true,quiet:false});return;}
   if (target.dataset.seasonClaim) {
     const item=ui.season?.challenges?.find(c=>c.code===target.dataset.seasonClaim);
@@ -838,7 +849,6 @@ document.addEventListener("click", async e=>{
     return;
   }
   if (target.dataset.click==="league") {tap();goToTab("league");return;}
-  if (target.dataset.click==="league-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.leagueRefresh) {await loadLeague({force:true,quiet:false});return;}
   if (target.dataset.marketRefresh) {await loadMarket({force:true,quiet:false});return;}
   if (target.dataset.marketKind) {
@@ -968,7 +978,6 @@ document.addEventListener("click", async e=>{
     return;
   }
   if (target.dataset.click==="inventory") {tap();goToTab("inventory");return;}
-  if (target.dataset.click==="inventory-back") {tap();goToTab(ui.returnTab||"home");return;}
   if (target.dataset.craft) {
     const recipe=ui.config.recipes.find(x=>x.code===target.dataset.craft);
     if (recipe) {
@@ -1021,7 +1030,12 @@ async function boot() {
     const started=(TG.initDataUnsafe?.start_param||"").match(/^p_(\d+)$/);
     let id=started?Number(started[1]):ui.config.chapter_pet_id??ui.pets[0].id;
     if(!ui.pets.some(p=>p.id===id)) id=ui.pets[0].id;
+    if (ui.config.chapter_pet_id===id && !started) {
+      navigation.select("world");
+      ui.tab=navigation.open("trips");
+    }
     await loadPet(id);
+    syncBackButton();
   } catch(e) {
     app.innerHTML='<div class="error-page"><div class="icon">🔒</div><h2>Не удалось открыть игру</h2>'+
       '<p class="muted">'+safe(e.message)+'</p>'+
