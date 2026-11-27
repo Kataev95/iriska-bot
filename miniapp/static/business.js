@@ -20,9 +20,9 @@
   function canAfford(costs, stock) {
     return costs.every(x=>n(stock[x.code])>=x.quantity);
   }
-  function workerDuration(unit, state, rules) {
+  function workerDuration(unit, state, rules, bonusPercent=100) {
     const percent=rules.worker_duration_percent?.[n(state.workers)]??100;
-    return Math.floor(unit.production_seconds*percent/100);
+    return Math.max(1,Math.floor(Math.floor(unit.production_seconds*percent/100)*bonusPercent/100));
   }
   function workState(job, rules, now) {
     const left=Math.max(0,Number(job.finish_at)-now);
@@ -36,7 +36,7 @@
       const canStart=starts>0&&canAfford(b.inputs,p.materials||{});
       return '<div class="tycoon-machine tycoon-idle"><div class="machine-art" aria-hidden="true"><span>⚙️</span><strong>'+esc(b.good_icon)+'</strong><span>⚙️</span></div>'+
         '<div class="eyebrow">ПРОИЗВОДСТВО</div><h2 class="h2">Подготовь партию</h2>'+
-        '<p class="subtitle">'+duration(workerDuration(b,state,rules))+' · '+esc(b.good_icon)+' '+n(b.outputs[lv-1])+' шт.</p>'+
+        '<p class="subtitle">'+duration(workerDuration(b,state,rules,p.progression?.effects.production_percent??100))+' · '+esc(b.good_icon)+' '+n(b.outputs[lv-1])+' шт.</p>'+
         materials(config,b.inputs,p.materials||{})+
         '<button class="btn btn-primary btn-wide" data-business-start="'+esc(b.code)+'" '+(!canStart?'disabled ':'')+'>'+
         (starts<=0?'Лимит запусков на сегодня':canStart?'▶ Запустить партию':'Не хватает материалов')+'</button>'+
@@ -84,8 +84,8 @@
     if(!lv)return head+equipment+'<div class="notice">После постройки откроются ручная работа, команда, общий склад и заказы.</div><button class="btn btn-quiet btn-wide" data-click="business-back">← Назад</button>';
     const canHire=worker&&workers<lv&&canAfford(worker.costs,stock);
     const workersCard='<section class="panel tycoon-upgrade"><div class="row"><strong>🧑‍🔧 Команда</strong><span class="chip chip-green">'+workers+' / 2</span></div>'+
-      '<p class="subtitle">Работники ускоряют новые партии даже вне Mini App. Время: '+duration(workerDuration(b,state,rules))+'.</p>'+
-      (worker?'<p class="subtitle">После найма: '+duration(Math.floor(b.production_seconds*worker.duration_percent/100))+'</p>'+
+      '<p class="subtitle">Работники ускоряют новые партии даже вне Mini App. Время: '+duration(workerDuration(b,state,rules,p.progression?.effects.production_percent??100))+'.</p>'+
+      (worker?'<p class="subtitle">После найма: '+duration(Math.max(1,Math.floor(Math.floor(b.production_seconds*worker.duration_percent/100)*(p.progression?.effects.production_percent??100)/100)))+'</p>'+
         materials(config,worker.costs,stock)+'<button class="btn btn-wide" data-tycoon-hire="'+esc(b.code)+'" '+(!canHire?'disabled ':'')+'>'+
         (workers>=lv?'Сначала улучшите оборудование':canHire?'Нанять работника':'Не хватает материалов')+'</button>':'<div class="business-done">Команда полностью укомплектована</div>')+'</section>';
     const sellable=Math.min(qty,Math.floor(allowed/Math.max(1,n(b.sell_price))));
