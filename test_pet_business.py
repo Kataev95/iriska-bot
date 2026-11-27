@@ -255,6 +255,91 @@ class BusinessGameTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.materials())["wood"],4)
         self.assertEqual((await self.day_state())["units"]["florist"]["level"],0)
 
+    async def test_tycoon_shared_taps_replay_cooldown_and_persistence(self):
+        await self.seed(wood=60,leaf=60,stone=20)
+        await self.build("florist")
+        await self.db.start_business_job(1,101,"florist",NOW,TZ)
+        job=(await self.day_state())["units"]["florist"]["job"]
+        self.assertEqual(job["taps"],0)
+        self.assertEqual(job["finish_at"],NOW+900)
+        before=await self.materials()
+        denied=await self.db.tap_tycoon_job(1,201,"florist",job["id"],0,NOW+1)
+        self.assertFalse(denied["accepted"])
+        for bad in (-1,999,True,"0"):
+            self.assertFalse((await self.db.tap_tycoon_job(
+                1,101,"florist",job["id"],bad,NOW+1))["accepted"])
+        results=await asyncio.gather(
+            self.db.tap_tycoon_job(1,101,"florist",job["id"],0,NOW+1),
+            self.db.tap_tycoon_job(1,102,"florist",job["id"],0,NOW+1),
+        )
+        self.assertEqual(sum(r["accepted"] for r in results),1)
+        self.assertEqual((await self.day_state())["units"]["florist"]["job"]["finish_at"],NOW+840)
+        self.assertFalse((await self.db.tap_tycoon_job(
+            1,102,"florist",job["id"],1,NOW+1.1))["accepted"])
+        await self.db.close()
+        self.db=Database(self.path)
+        await self.db.connect()
+        self.assertEqual((await self.day_state())["units"]["florist"]["job"]["taps"],1)
+        for i in range(1,15):
+            r=await self.db.tap_tycoon_job(1,102,"florist",job["id"],i,NOW+i+1)
+            self.assertTrue(r["accepted"],r)
+        self.assertEqual(r["job"]["finish_at"],NOW+15)
+        self.assertEqual(await self.materials(),before)
+        self.assertEqual((await self.day_state())["units"]["florist"]["stock"],0)
+        self.assertEqual((await self.day_state())["starts_remaining"],3)
+        self.assertFalse((await self.db.tap_tycoon_job(
+            1,101,"florist",job["id"],15,NOW+16))["accepted"])
+        results=await asyncio.gather(
+            self.db.collect_business_job(1,101,"florist",job["id"],NOW+16),
+            self.db.collect_business_job(1,102,"florist",job["id"],NOW+16),
+        )
+        self.assertEqual(sum(r.startswith("✅") for r in results),1)
+        self.assertEqual((await self.day_state())["units"]["florist"]["stock"],2)
+        self.assertEqual((await self.db.get_user(CHAT,101))["balance"],0)
+
+    async def test_tycoon_workers_and_orders_share_old_limits(self):
+        await self.seed(wood=100,leaf=100,stone=100,crystal=10)
+        await self.build("florist")
+        await self.db.start_business_job(1,101,"florist",NOW,TZ)
+        old=(await self.day_state())["units"]["florist"]["job"]
+        before=await self.materials()
+        results=await asyncio.gather(
+            self.db.hire_tycoon_worker(1,101,"florist",0),
+            self.db.hire_tycoon_worker(1,102,"florist",0),
+        )
+        self.assertEqual(sum(r.startswith("✅") for r in results),1)
+        self.assertEqual((await self.materials())["leaf"],before["leaf"]-5)
+        self.assertEqual((await self.materials())["wood"],before["wood"]-3)
+        self.assertEqual((await self.day_state())["units"]["florist"]["job"],old)
+        self.assertIn("оборудование",await self.db.hire_tycoon_worker(1,101,"florist",1))
+        await self.build("florist",1)
+        self.assertTrue((await self.db.hire_tycoon_worker(1,102,"florist",1)).startswith("✅"))
+        await self.db.collect_business_job(1,101,"florist",old["id"],NOW+901)
+        await self.db.start_business_job(1,102,"florist",NOW+902,TZ)
+        job=(await self.day_state())["units"]["florist"]["job"]
+        self.assertEqual(job["finish_at"],NOW+902+450)
+        self.assertEqual(job["quantity"],3)
+        tap=await self.db.tap_tycoon_job(1,101,"florist",job["id"],0,NOW+903)
+        self.assertEqual(tap["job"]["finish_at"],job["finish_at"]-90)
+        await self.db.collect_business_job(1,101,"florist",job["id"],NOW+1500)
+        self.assertEqual((await self.day_state())["units"]["florist"]["stock"],5)
+        results=await asyncio.gather(
+            self.db.sell_business_goods(1,101,"florist",NOW+1501,TZ,order=True,expected_stock=5),
+            self.db.sell_business_goods(1,102,"florist",NOW+1501,TZ,order=True,expected_stock=5),
+        )
+        self.assertEqual(sum(r.startswith("✅") for r in results),1)
+        self.assertEqual((await self.day_state())["units"]["florist"]["stock"],3)
+        self.assertEqual((await self.day_state())["sales_coins_remaining"],8)
+        await self.db.sell_business_goods(1,101,"florist",NOW+1502,TZ)
+        self.assertEqual((await self.day_state())["sales_coins_remaining"],2)
+        total=sum([(await self.db.get_user(CHAT,u))["balance"] for u in (101,102)])
+        self.assertEqual(total,10)
+        await self.db.close()
+        self.db=Database(self.path)
+        await self.db.connect()
+        self.assertEqual((await self.day_state())["units"]["florist"]["workers"],2)
+        self.assertEqual((await self.day_state())["sales_coins_remaining"],2)
+
 
 class BusinessDefinitionsTests(unittest.TestCase):
     def test_prices_are_bounded_and_recipes_valid(self):
