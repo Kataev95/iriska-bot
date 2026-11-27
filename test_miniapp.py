@@ -6,6 +6,7 @@ import hmac
 import json
 import time
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
@@ -119,6 +120,13 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pet["balance"], 20)
         self.assertEqual(pet["level"], 1)
         self.assertIn("/assets/pets/dragon_", pet["image"])
+        self.assertEqual(pet["world_hour"], datetime.fromtimestamp(pet["server_time"], self.config.tz).hour)
+        self.assertFalse(pet["partner_wrote_today"])
+        day = datetime.now(self.config.tz).date().isoformat()
+        await self.db._require().execute("UPDATE pets SET b_day=? WHERE id=1", (day,))
+        await self.db._require().commit()
+        response = await self.client.get("/api/pet/1", headers=self.headers)
+        self.assertTrue((await response.json())["partner_wrote_today"])
 
     async def test_actions_are_authorized_and_existing_db_is_authoritative(self):
         # An attacker cannot act on another player's shared pet.
@@ -697,21 +705,21 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("syncClock(snapshot)", js)
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
-        self.assertIn("/static/house.js?v=1", html)
+        self.assertIn("/static/house.js?v=2", html)
         self.assertIn("/static/app.js?v=14", html)
         self.assertIn("/static/world-ui.js?v=1", html)
         self.assertIn("/static/world.css?v=1", html)
         self.assertIn("/static/navigation.js?v=1", html)
-        self.assertIn("/static/studio.js?v=2", html)
+        self.assertIn("/static/studio.js?v=3", html)
         self.assertIn("/static/studio.css?v=2", html)
         self.assertIn("/static/season.js?v=1", html)
         self.assertIn("/static/season.css?v=1", html)
-        self.assertIn("/static/league.js?v=1", html)
+        self.assertIn("/static/league.js?v=2", html)
         self.assertIn("/static/league.css?v=1", html)
         self.assertIn("/static/market.css?v=1", html)
         self.assertIn("/static/market.js?v=1", html)
         self.assertIn("/static/business.css?v=1", html)
-        self.assertIn("/static/business.js?v=1", html)
+        self.assertIn("/static/business.js?v=2", html)
 
 
 class MiniAppFeedbackTests(unittest.TestCase):
@@ -826,6 +834,8 @@ assert.equal(nav.back(), "home");
         self.assertIn("partner_wrote_today", js)
         self.assertIn('max="100" value="', js)
         self.assertNotIn("backdrop-filter:blur", css)
+        for name in ("app.js", "house.js", "business.js", "league.js", "studio.js"):
+            self.assertNotIn('style="width:', (static / name).read_text(encoding="utf-8"))
         if not shutil.which("node"):
             self.skipTest("Node runtime not available")
         script = static / "world-ui.js"
