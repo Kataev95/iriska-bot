@@ -400,6 +400,61 @@ class GameHttpTests(unittest.IsolatedAsyncioTestCase):
             json={"pet_id":1,"kind":"business_sell","code":"florist"})
         self.assertEqual(unauth.status,401)
 
+    async def test_progression_http_shared_claims_skills_and_specialization(self):
+        from pet_game import xp_for_level
+        partner={"X-Telegram-Init-Data":signed(102)}
+        stranger={"X-Telegram-Init-Data":signed(201)}
+        async def act(kind,code="",headers=None,**extra):
+            r=await self.client.post("/api/action",headers=headers or self.headers,
+                json={"pet_id":1,"kind":kind,"code":code,**extra})
+            self.assertEqual(r.status,200)
+            return await r.json()
+        config=await (await self.client.get("/api/bootstrap",headers=self.headers)).json()
+        self.assertEqual(config["progression"]["max_level"],100)
+        self.assertEqual(len(config["progression"]["thresholds"]),100)
+        self.assertEqual(len(config["professions"]),6)
+        denied=await self.client.post("/api/action",headers=stranger,
+            json={"pet_id":1,"kind":"skill_learn","code":"trail","expected_rank":0})
+        self.assertEqual(denied.status,403)
+        low=await act("skill_learn","trail",expected_rank=0)
+        self.assertFalse(low["message"].startswith("✅"))
+        db=self.db._require()
+        await db.execute("UPDATE pets SET xp=?,profession='explorer' WHERE id=1",(xp_for_level(30),))
+        await db.commit()
+        state=await (await self.client.get("/api/pet/1",headers=self.headers)).json()
+        self.assertEqual(state["level"],30)
+        self.assertEqual(state["max_level"],100)
+        self.assertEqual(state["progression"]["points"],6)
+        self.assertEqual(state["profession"],"explorer")
+        blocked=await act("skill_learn","wisdom",expected_rank=0)
+        self.assertIn("предыдущий",blocked["message"])
+        invalid=await act("skill_learn","trail",expected_rank=True)
+        self.assertFalse(invalid["message"].startswith("✅"))
+        results=await asyncio.gather(
+            act("skill_learn","trail",expected_rank=0,points=999),
+            act("skill_learn","trail",headers=partner,expected_rank=0))
+        self.assertEqual(sum(r["message"].startswith("✅") for r in results),1)
+        await act("skill_learn","trail",expected_rank=1)
+        wisdom=await act("skill_learn","wisdom",expected_rank=0)
+        self.assertEqual(wisdom["pet"]["progression"]["points"],3)
+        self.assertEqual(wisdom["pet"]["progression"]["effects"]["trip_xp_percent"],123)
+        results=await asyncio.gather(
+            act("specialization","wanderer"),
+            act("specialization","healer",headers=partner))
+        self.assertEqual(sum(r["message"].startswith("✅") for r in results),1)
+        results=await asyncio.gather(act("level_claim",level=20,quantity=999),
+                                     act("level_claim",headers=partner,level=20))
+        self.assertEqual(sum(r["message"].startswith("✅") for r in results),1)
+        state=await (await self.client.get("/api/pet/1",headers=partner)).json()
+        self.assertEqual(state["progression"]["claimed"],[20])
+        self.assertEqual(state["materials"]["wood"],5)
+        self.assertEqual(state["materials"]["stone"],3)
+        self.assertEqual(state["profession"],"explorer")
+        self.assertEqual(state["xp"],xp_for_level(30))
+        self.assertFalse((await act("level_claim",level=100))["message"].startswith("✅"))
+        self.assertFalse((await act("level_claim",level=True))["message"].startswith("✅"))
+        self.assertEqual((await self.db.get_user(CHAT_ID,101))["balance"],20)
+
     async def test_arcade_http_session_auth_and_score(self):
         partner={"X-Telegram-Init-Data":signed(102)}
         stranger={"X-Telegram-Init-Data":signed(201)}
@@ -1042,11 +1097,13 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/style.css?v=6", html)
         self.assertIn("/static/house.css?v=1", html)
         self.assertIn("/static/house.js?v=2", html)
-        self.assertIn("/static/app.js?v=19", html)
+        self.assertIn("/static/app.js?v=20", html)
         self.assertIn("/static/world-map.js?v=3", html)
         self.assertIn("/static/arcade.js?v=1", html)
+        self.assertIn("/static/progression.js?v=1", html)
+        self.assertIn("/static/progression.css?v=1", html)
         self.assertIn("/static/arcade.css?v=1", html)
-        self.assertIn("/static/countryside.js?v=1", html)
+        self.assertIn("/static/countryside.js?v=2", html)
         self.assertIn("/static/countryside.css?v=1", html)
         self.assertIn("/static/world-map.css?v=1", html)
         self.assertIn("/static/pet-life.js?v=1", html)
@@ -1063,7 +1120,7 @@ class MiniAppFullscreenLayoutTests(unittest.TestCase):
         self.assertIn("/static/market.css?v=1", html)
         self.assertIn("/static/market.js?v=1", html)
         self.assertIn("/static/business.css?v=2", html)
-        self.assertIn("/static/business.js?v=3", html)
+        self.assertIn("/static/business.js?v=4", html)
 
 
 class MiniAppFeedbackTests(unittest.TestCase):
@@ -1452,6 +1509,35 @@ assert.match(a.render(p,cfg,102),/data-arcade-move="up" disabled/);
         cp=subprocess.run(["node","-e",code,str(script)],capture_output=True,text=True,timeout=15,check=False)
         self.assertEqual(cp.returncode,0,cp.stderr)
 
+    def test_progression_frontend(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        static=Path(__file__).resolve().parent/"miniapp"/"static"
+        if not shutil.which("node"):
+            self.skipTest("Node runtime not available")
+        script=static/"progression.js"
+        code="""
+const assert=require("node:assert/strict"), g=require(process.argv[1]);
+const skills=[{code:"trail",name:"Следопыт",icon:"🧭",branch:"adventure",level:5,max:5,effect:"Энергия"},{code:"wisdom",name:"Мудрость",icon:"📚",branch:"adventure",level:20,max:5,requires:"trail",rank:2,effect:"XP"}];
+const p={best_streak:2,level:30,xp:20400,level_start_xp:20400,next_xp:21600,streak:1,freezes:0,profession:"explorer",profession_title:"Исследователь",progression:{skills:{trail:1},points:5,earned_points:6,claimed:[10],evolution:{level:20,name:"Легенда",icon:"👑"},specialization:""}};
+const cfg={progression:{max_level:100,skills,stages:[{level:20,name:"Легенда",icon:"👑"},{level:35,name:"Герой",icon:"🛡"}],milestones:[{level:10,materials:{wood:3}},{level:20,materials:{stone:3}}],specializations:[{code:"wanderer",name:"Странник",icon:"🧭",effect:"XP"}],specialization_level:30},professions:[{code:"explorer",name:"Исследователь",effect:"XP"}],materials:[]};
+assert.equal(g.percent(p),0);
+assert.equal(g.percent({...p,next_xp:null}),100);
+assert.equal(g.skillStatus(p,skills[1]).allowed,false);
+p.progression.skills.trail=2;
+assert.equal(g.skillStatus(p,skills[1]).allowed,true);
+assert.equal(g.skillStatus({...p,level:5},skills[1]).allowed,false);
+const html=g.render(p,cfg);
+assert.match(html,/Уровень 30 \/ 100/);
+assert.match(html,/data-level-claim="10" disabled/);
+assert.match(html,/data-specialization="wanderer"/);
+assert.match(html,/data-skill="wisdom" data-rank="0"/);
+assert.doesNotMatch(html,/style=/);
+"""
+        cp=subprocess.run(["node","-e",code,str(script)],capture_output=True,text=True,timeout=15,check=False)
+        self.assertEqual(cp.returncode,0,cp.stderr)
+
     def test_frontend_javascript_has_valid_syntax(self):
         from pathlib import Path
         import shutil
@@ -1459,7 +1545,7 @@ assert.match(a.render(p,cfg,102),/data-arcade-move="up" disabled/);
         if not shutil.which("node"):
             self.skipTest("Node runtime not available (GitHub Actions checks parsing)")
         static = Path(__file__).resolve().parent / "miniapp" / "static"
-        for name in ("arcade.js", "countryside.js", "world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
+        for name in ("progression.js", "arcade.js", "countryside.js", "world-map.js", "pet-life.js", "world-ui.js", "navigation.js", "app.js", "house.js", "business.js", "market.js", "league.js", "season.js", "studio.js"):
             js = static / name
             cp = subprocess.run(["node", "--check", str(js)], capture_output=True,
                                 text=True, timeout=15, check=False)
