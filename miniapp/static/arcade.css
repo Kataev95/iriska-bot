@@ -1,0 +1,47 @@
+/* Arcade: responsive cabinet, green/gold theme, no canvas or persistent animation loops. */
+.arcade-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px;border-radius:22px;border:1px solid #8a9e77;background:linear-gradient(145deg,#334b44,#625639);margin:12px 0;min-height:120px}
+.arcade-banner h1{font-size:27px;color:#fff4d8;letter-spacing:-.04em;margin:4px 0}
+.arcade-banner p{font-size:12px;color:#e5dfc4;margin:0}
+.arcade-banner>span{font-size:60px;line-height:1;flex-shrink:0}
+.arcade-rewards,.arcade-row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.arcade-rewards{padding:12px;background:#283f33;border:1px solid #5b7757;border-radius:15px;margin-bottom:12px;font-size:12px;color:#dbe4c8}
+.arcade-rewards strong{font-size:18px;color:#ffe0a2}
+.arcade-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.arcade-card.panel{min-width:0;margin:0;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:12px;background:linear-gradient(145deg,#324b3c,#20382e)}
+.arcade-icon{font-size:36px;line-height:1.2}
+.arcade-card h2{font-size:14px;line-height:1.3;margin:0;color:#f8efd3;overflow-wrap:anywhere}
+.arcade-card p{color:#c6d9c4;font-size:11px;line-height:1.45;margin:0;flex:1}
+.arcade-record{display:grid;gap:4px;margin:6px 0;padding:7px;background:#182e27;border-radius:10px;font-size:10px;color:#c6d5bd}
+.arcade-record>span{display:flex;justify-content:space-between;gap:3px;flex-wrap:wrap}
+.arcade-record b{color:#ffdfa0}
+.arcade-card .btn{font-size:11px;padding:10px 4px;min-height:44px;margin:0}
+.arcade-result{display:flex;flex-direction:column;gap:5px;align-items:center;text-align:center;background:linear-gradient(145deg,#4d5435,#273d32)}
+.arcade-result>b{font-size:28px;color:#ffe0a4}
+.arcade-game{background:linear-gradient(145deg,#2c443a,#1d342e)}
+.arcade-round{font-size:12px;color:#cadbc6;margin-top:12px;text-align:center}
+.arcade-status{min-height:26px;margin:10px 0;font-weight:800;font-size:17px;text-align:center;color:#ffefb9}
+.arcade-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.arcade-lane{display:grid;gap:7px;min-width:0}
+.arcade-track{position:relative;height:146px;border:1px solid #719474;background:linear-gradient(#3a6351,#234637);border-radius:12px;overflow:hidden}
+.arcade-track::after{content:"";position:absolute;bottom:32px;left:8px;right:8px;border-top:2px dashed #e2dba75c}
+.arcade-falling{position:absolute;z-index:2;left:50%;top:var(--fall,12%);transform:translate(-50%,-50%);font-size:30px;line-height:1}
+.arcade-basket{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);font-size:30px;line-height:1}
+.arcade-lane-btn{min-height:44px;font-size:15px;background:#62864e;color:#f7efd9}
+.arcade-memory{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;margin:12px 0}
+.arcade-memory span{display:grid;place-items:center;min-height:46px;background:#1a3027;border:1px solid #68815c;border-radius:10px;font-size:21px;color:#d5e0bb}
+.arcade-memory-keys{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+.arcade-memory-keys .btn{font-size:26px;min-height:59px;padding:5px}
+.arcade-signal{width:100%;min-height:158px;display:grid;align-content:center;justify-items:center;gap:8px;border-radius:19px;border:2px solid #a68b70;background:#625044;color:#f7e7cd;touch-action:manipulation}
+.arcade-signal span{font-size:52px;line-height:1}.arcade-signal b{font-size:24px}
+.arcade-signal.signal-ready{background:#a1c77a;color:#153a27;border-color:#e3efaf}
+.arcade-signal.signal-late{background:#334a49;color:#eceddc;border-color:#77988e}
+.arcade-maze{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;max-width:290px;margin:12px auto;padding:7px;background:#122d25;border-radius:13px;border:1px solid #6b8867}
+.maze-cell{display:grid;place-items:center;aspect-ratio:1;border-radius:4px;min-width:0;font-size:clamp(12px,4vw,25px)}
+.maze-cell.wall{background:#426447}.maze-cell.path{background:#b4c29a}
+.maze-cell.exit{background:#f4d18c}.maze-cell.player{background:#e8c67b}
+.arcade-directions{display:grid;grid-template-columns:repeat(3,minmax(44px,64px));grid-template-rows:repeat(2,44px);justify-content:center;gap:6px}
+.arcade-directions .btn{font-size:21px;padding:0;min-height:44px}
+.dir-up{grid-column:2;grid-row:1}.dir-left{grid-column:1;grid-row:2}.dir-down{grid-column:2;grid-row:2}.dir-right{grid-column:3;grid-row:2}
+.arcade-game button:focus-visible,.arcade-card button:focus-visible{outline:2px solid #fff3bd;outline-offset:2px}
+@media(max-width:360px){.arcade-grid{gap:6px}.arcade-card.panel{padding:9px}.arcade-banner>span{font-size:44px}.arcade-memory span{font-size:17px}.arcade-card h2{font-size:13px}}
+@media(prefers-reduced-motion:reduce){.arcade-falling{top:72%}}
