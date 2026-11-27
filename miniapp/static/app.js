@@ -25,7 +25,7 @@ for (const event of ["safeAreaChanged", "contentSafeAreaChanged", "fullscreenCha
 syncSafeArea();
 
 const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
-             group: "food", businessCode: "florist", busy: false, syncing: false, lastSync: 0,
+             group: "food", businessCode: "florist", mapLocation: null, busy: false, syncing: false, lastSync: 0,
              syncSerial: 0, clockDelta: 0, toastTimer: 0, picker: false,
              studioMode:"frames",
              studio:null, studioLoading:false, studioFetchedAt:0, studioRequest:0,
@@ -37,6 +37,7 @@ const ui = { config: null, pet: null, pets: [], selected: null, tab: "home",
 const navigation = window.PetsNavigation.create();
 const tabs = window.PetsNavigation.tabs;
 const design = window.PetsWorldUI;
+const worldMap = window.PetsMap;
 const icon = design.icon;
 const life = window.PetsLife;
 const reactionGate = life.createGate();
@@ -412,10 +413,54 @@ function profile(p) {
   ]);
 }
 function world(p) {
-  return hub("🌍 Мир питомца","Ваши места и совместные приключения",[
-    hubCard("house","🏡","Домик",p.house?"Комнаты и улучшения":"Постройте свой дом"),
-    hubCard("trips","🧭","Приключения",p.trip?"Текущий поход и награды":"Маршруты и лесная тропа")
-  ]);
+  return worldMap.renderMap(p,serverNow(),ui.config,design.phase(p.world_hour));
+}
+function syncWorldMap() {
+  if(ui.tab!=="world"||!ui.pet)return;
+  const p=ui.pet, now=serverNow();
+  if(!worldMap.valid(ui.mapLocation))ui.mapLocation=worldMap.recommended(p,now,ui.config);
+  const scene=app.querySelector(".world-map");
+  if(!scene)return;
+  const phase="map-phase-"+design.phase(p.world_hour);
+  if(!scene.classList.contains(phase)){
+    scene.classList.remove("map-phase-morning","map-phase-day","map-phase-evening","map-phase-night");
+    scene.classList.add(phase);
+  }
+  for(const button of scene.querySelectorAll("[data-map-location]")){
+    const place=worldMap.get(button.dataset.mapLocation), status=worldMap.status(place,p,now,ui.config);
+    const pressed=String(place.id===ui.mapLocation);
+    if(button.getAttribute("aria-pressed")!==pressed)button.setAttribute("aria-pressed",pressed);
+    const tone="tone-"+status.tone;
+    if(!button.classList.contains(tone)){
+      button.classList.remove("tone-open","tone-active","tone-reward","tone-future");
+      button.classList.add(tone);
+    }
+    const label=place.name+" — "+status.text;
+    if(button.getAttribute("aria-label")!==label)button.setAttribute("aria-label",label);
+    const badge=button.querySelector("[data-map-status]");
+    if(badge&&badge.textContent!==status.text)badge.textContent=status.text;
+  }
+  patchHome("[data-world-detail]",worldMap.renderDetail(ui.mapLocation,p,now,ui.config));
+}
+function selectWorldLocation(id) {
+  if(ui.busy||ui.tab!=="world"||!worldMap.valid(id))return;
+  ui.mapLocation=id;
+  syncWorldMap();
+  tap();
+  // On small screens the detail may be just below the fold. Keep selection
+  // visible and bring only the description/action into view on explicit taps.
+  app.querySelector("[data-world-detail]")?.scrollIntoView?.({block:"nearest",behavior:"auto"});
+}
+function openWorldLocation(id) {
+  if(ui.busy||ui.tab!=="world"||!worldMap.valid(id)||id!==ui.mapLocation)return;
+  const place=worldMap.get(id);
+  if(!place.route)return;
+  const status=worldMap.status(place,ui.pet,serverNow(),ui.config);
+  if(place.route==="business"&&status.businessCode&&ui.config.businesses.some(b=>b.code===status.businessCode)){
+    ui.businessCode=status.businessCode;
+  }
+  tap();
+  goToTab(place.route);
 }
 function games(p) {
   return hub("🎮 Игры","Развивайтесь вместе и выполняйте задания",[
@@ -628,9 +673,19 @@ function render() {
     patchHome("[data-home-body]",home(p));
     return;
   }
+  if(ui.tab==="world"){
+    if(!app.querySelector("[data-world-scene]")){
+      clearPetReaction();
+      app.innerHTML='<div data-world-tools></div><div data-world-scene></div><div data-world-detail aria-live="polite"></div>';
+      app.querySelector("[data-world-scene]").innerHTML=world(p);
+    }
+    patchHome("[data-world-tools]",tools);
+    syncWorldMap();
+    return;
+  }
   clearPetReaction();
   app.innerHTML=tools+({
-    profile,world,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
+    profile,games,trade,club,trips,tasks,shop,growth,wardrobe,inventory,
     house: p => window.PetsHouse.renderHouse(p,ui.config),
     business: p => window.PetsBusiness.renderBusiness(p,ui.config,serverNow(),ui.businessCode),
     market: p => window.PetsMarket.renderMarket(
@@ -647,6 +702,7 @@ function patchHome(selector,markup){
   node.dataset.markup=markup;
 }
 function setPet(snapshot) {
+  if(ui.pet?.id!==snapshot.id)ui.mapLocation=null;
   ui.pet = snapshot;
   syncClock(snapshot);
   ui.lastSync = Date.now();
@@ -795,6 +851,7 @@ function syncTimers() {
     loadMarket();
   }
   if(ui.tab==="business") syncTycoon();
+  if(ui.tab==="world") syncWorldMap();
   if (ui.tab === "trips" && ui.pet.trip) {
     const remaining = Math.max(0, ui.pet.trip.finish_at - serverNow());
     const label = app.querySelector("[data-trip-countdown]");
@@ -948,6 +1005,8 @@ document.addEventListener("click", async e=>{
   const target=e.target.closest("button");if(!target) return;
   if (target.dataset.root) {tap();goToTab(target.dataset.root,true);return;}
   if (target.dataset.tab) {tap();goToTab(target.dataset.tab);return;}
+  if (target.dataset.mapLocation) {selectWorldLocation(target.dataset.mapLocation);return;}
+  if (target.dataset.mapOpen) {openWorldLocation(target.dataset.mapOpen);return;}
   if (["house-back","business-back","market-back","studio-back","season-back",
        "league-back","inventory-back","wardrobe-back"].includes(target.dataset.click)) {
     tap();goBack();return;
